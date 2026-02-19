@@ -6,7 +6,6 @@ on:
 env:
   REPO_URL: https://github.com/openwrt/openwrt
   REPO_BRANCH: v24.10.5
-  # 使用单独的配置文件，避免冲突
   CUSTOM_CONFIG: config.plugins
   DIY_P1_SH: op1.sh
   DIY_P2_SH: op2.sh
@@ -43,9 +42,7 @@ jobs:
     - name: 生成 feeds.conf.default（自动添加 kenzok8 源）
       run: |
         cd openwrt
-        # 备份原有文件（如果存在）
         [ -f feeds.conf.default ] && mv feeds.conf.default feeds.conf.default.bak
-        # 写入官方默认源 + kenzok8 源
         cat > feeds.conf.default << EOF
         src-git packages https://git.openwrt.org/feed/packages.git
         src-git luci https://git.openwrt.org/project/luci.git
@@ -73,15 +70,12 @@ jobs:
     - name: 再次更新 feeds
       run: cd openwrt && ./scripts/feeds update -a
 
-    - name: 安装 feeds（只安装需要的包以节省时间）
-      run: |
-        cd openwrt
-        ./scripts/feeds install luci-app-openclash mosdns luci-theme-argon
+    - name: 安装全部 feeds（确保所有依赖都被安装）
+      run: cd openwrt && ./scripts/feeds install -a
 
-    - name: 加载自定义配置（使用单独的文件）
+    - name: 加载自定义配置
       run: |
         [ -e files ] && mv files openwrt/files
-        # 将仓库中的配置文件（如 config.plugins）复制为 .config
         if [ -f "$CUSTOM_CONFIG" ]; then
           cp "$CUSTOM_CONFIG" openwrt/.config
           echo "已使用 $CUSTOM_CONFIG 作为 .config"
@@ -99,16 +93,18 @@ jobs:
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: 编译指定的插件（OpenClash, MosDNS, Argon）
+    - name: 编译指定的插件
       id: compile
       run: |
         cd openwrt
-        # 编译 OpenClash 及其依赖
-        make package/feeds/kenzo/luci-app-openclash/compile V=s
-        # 编译 MosDNS
-        make package/feeds/small/mosdns/compile V=s
+        # 编译 OpenClash（尝试两种可能的路径）
+        make package/feeds/kenzo/luci-app-openclash/compile V=s || make package/luci-app-openclash/compile V=s
+        # 编译 MosDNS 主程序
+        make package/feeds/small/mosdns/compile V=s || make package/mosdns/compile V=s
+        # 编译 MosDNS 的 LuCI 界面
+        make package/feeds/small/luci-app-mosdns/compile V=s || make package/luci-app-mosdns/compile V=s
         # 编译 Argon 主题
-        make package/feeds/kenzo/luci-theme-argon/compile V=s
+        make package/feeds/kenzo/luci-theme-argon/compile V=s || make package/luci-theme-argon/compile V=s
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: 收集生成的 ipk 包
@@ -116,10 +112,8 @@ jobs:
       run: |
         cd openwrt
         mkdir -p packages_collected
-        # 复制所有新生成的 ipk（包括依赖）
         find bin/packages -name "*.ipk" -exec cp {} packages_collected/ \;
         find bin/targets -name "*.ipk" -exec cp {} packages_collected/ \;
-        # 生成设备名和日期用于 artifact 命名
         echo "DEVICE_NAME=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/')" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "PKG_DIR=$PWD/packages_collected" >> $GITHUB_ENV
@@ -147,7 +141,7 @@ jobs:
         retain_days: 1
         keep_minimum_runs: 3
 
-    - name: 删除旧 Releases（保留最近3个）
+    - name: 删除旧 Releases
       uses: dev-drprasad/delete-older-releases@master
       with:
         keep_latest: 3
