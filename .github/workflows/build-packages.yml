@@ -1,153 +1,38 @@
-name: Build OpenWrt Packages (OpenClash, MosDNS, Argon)
+- name: 生成 feeds.conf.default（仅官方源）
+  run: |
+    cd openwrt
+    cat > feeds.conf.default << EOF
+    src-git packages https://git.openwrt.org/feed/packages.git
+    src-git luci https://git.openwrt.org/project/luci.git
+    src-git routing https://git.openwrt.org/feed/routing.git
+    src-git telephony https://git.openwrt.org/feed/telephony.git
+    EOF
 
-on:
-  workflow_dispatch:
+- name: 更新并安装 feeds
+  run: |
+    cd openwrt
+    ./scripts/feeds update -a
+    ./scripts/feeds install -a
 
-env:
-  REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: v24.10.5
-  CUSTOM_CONFIG: config.plugins
-  DIY_P1_SH: op1.sh
-  DIY_P2_SH: op2.sh
-  DIY_P3_SH: op3.sh
-  TZ: Asia/Shanghai
+- name: 克隆插件源码
+  run: |
+    chmod +x $GITHUB_WORKSPACE/clone-plugins.sh
+    $GITHUB_WORKSPACE/clone-plugins.sh
 
-jobs:
-  build-packages:
-    runs-on: ubuntu-latest
-    steps:
-    - name: 检出代码
-      uses: actions/checkout@main
+- name: 复制 .config
+  run: cp $GITHUB_WORKSPACE/config.plugins openwrt/.config
 
-    - name: 初始化环境
-      run: |
-        sudo apt update
-        sudo apt install -y build-essential clang flex bison g++ gawk \
-          gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
-          python3-setuptools rsync swig unzip zlib1g-dev file wget
-        sudo timedatectl set-timezone 'Asia/Shanghai'
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+- name: 生成配置并下载
+  run: |
+    cd openwrt
+    make defconfig
+    make download -j8
 
-    - name: 克隆 OpenWrt 源码
-      working-directory: /workdir
-      run: |
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-    - name: 加载玩客云文件
-      run: |
-        [ -e target ] && cp -rf target openwrt/
-
-    - name: 生成 feeds.conf.default（只添加 passwall 源）
-      run: |
-        cd openwrt
-        cat > feeds.conf.default << EOF
-        src-git packages https://git.openwrt.org/feed/packages.git
-        src-git luci https://git.openwrt.org/project/luci.git
-        src-git routing https://git.openwrt.org/feed/routing.git
-        src-git telephony https://git.openwrt.org/feed/telephony.git
-        src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall.git;packages
-        src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;luci
-        EOF
-
-    - name: 执行自定义脚本 op1.sh
-      run: |
-        chmod +x $DIY_P1_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
-
-    - name: 更新 feeds（忽略错误，尝试继续）
-      continue-on-error: true
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: 手动克隆 openclash 源码（如果 feeds 安装失败）
-      run: |
-        cd openwrt
-        # 如果 passwall 源中没有 openclash，可以手动从 vernesong 的仓库克隆
-        if [ ! -d package/feeds/passwall_luci/luci-app-openclash ]; then
-          git clone https://github.com/vernesong/OpenClash.git package/openclash
-          # 将 luci-app-openclash 移动到正确位置（根据实际仓库结构调整）
-          cp -r package/openclash/luci-app-openclash package/feeds/passwall_luci/ || true
-        fi
-
-    - name: 安装需要的包
-      run: |
-        cd openwrt
-        ./scripts/feeds install -p passwall_luci luci-app-openclash luci-theme-argon
-        ./scripts/feeds install -p passwall_packages mosdns luci-app-mosdns
-        echo "=== 检查安装结果 ==="
-        ls -la package/feeds/passwall_luci/ || true
-        ls -la package/feeds/passwall_packages/ || true
-
-    - name: 加载自定义配置
-      run: |
-        [ -e files ] && mv files openwrt/files
-        if [ -f "$CUSTOM_CONFIG" ]; then
-          cp "$CUSTOM_CONFIG" openwrt/.config
-          echo "已使用 $CUSTOM_CONFIG 作为 .config"
-        else
-          echo "错误：未找到 $CUSTOM_CONFIG 文件！" && exit 1
-        fi
-        chmod +x $DIY_P2_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
-
-    - name: 生成配置并下载源码
-      run: |
-        cd openwrt
-        make defconfig
-        make download -j8
-        find dl -size -1024c -exec rm -f {} \;
-
-    - name: 编译工具链
-      run: cd openwrt && make toolchain/compile -j$(nproc) V=s
-
-    - name: 编译插件
-      id: compile
-      run: |
-        cd openwrt
-        # 定义包列表
-        PACKAGES="luci-app-openclash mosdns luci-app-mosdns luci-theme-argon"
-        for pkg in $PACKAGES; do
-          echo "尝试编译 $pkg ..."
-          if make package/feeds/passwall_luci/$pkg/compile -j$(nproc) V=s; then
-            echo "$pkg 编译成功（passwall_luci）"
-          elif make package/feeds/passwall_packages/$pkg/compile -j$(nproc) V=s; then
-            echo "$pkg 编译成功（passwall_packages）"
-          elif make package/$pkg/compile -j$(nproc) V=s; then
-            echo "$pkg 编译成功（package/）"
-          else
-            echo "错误：无法编译 $pkg，请检查包名或 feeds 安装情况。"
-            exit 1
-          fi
-        done
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: 收集 ipk
-      id: collect
-      run: |
-        cd openwrt
-        mkdir -p packages_collected
-        find bin/packages -name "*.ipk" -exec cp {} packages_collected/ \;
-        find bin/targets -name "*.ipk" -exec cp {} packages_collected/ \;
-        echo "DEVICE_NAME=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/')" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-        echo "PKG_DIR=$PWD/packages_collected" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: 上传 Artifact
-      uses: actions/upload-artifact@main
-      if: steps.collect.outputs.status == 'success'
-      with:
-        name: openwrt-packages-${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.PKG_DIR }}/*.ipk
-
-    - name: 上传 Release
-      uses: softprops/action-gh-release@master
-      if: steps.collect.outputs.status == 'success'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: packages-${{ github.run_number }}
-        files: ${{ env.PKG_DIR }}/*.ipk
+- name: 编译插件
+  run: |
+    cd openwrt
+    make package/my/luci-app-openclash/compile -j$(nproc) V=s
+    make package/my/luci-theme-argon/compile -j$(nproc) V=s
+    make package/my/luci-app-mosdns/compile -j$(nproc) V=s
+    # 如果 mosdns 主程序也有 Makefile，同样编译
+    make package/my/mosdns/compile -j$(nproc) V=s || true
