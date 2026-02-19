@@ -7,7 +7,7 @@ env:
   REPO_URL: https://github.com/openwrt/openwrt
   REPO_BRANCH: v24.10.5
   CUSTOM_CONFIG: config.plugins
-  DIY_P1_SH: op1.sh      # 可选，若不需要可设为空
+  DIY_P1_SH: op1.sh      # 可选，若不需要可保留空或删除
   DIY_P2_SH: op2.sh
   DIY_P3_SH: op3.sh
   TZ: Asia/Shanghai
@@ -39,18 +39,16 @@ jobs:
       run: |
         [ -e target ] && cp -rf target openwrt/
 
-    - name: 生成 feeds.conf.default（仅官方源）
+    - name: 生成 feeds.conf.default（仅 packages 和 luci 源，避免 telephony 问题）
       run: |
         cd openwrt
         cat > feeds.conf.default << EOF
         src-git packages https://git.openwrt.org/feed/packages.git
         src-git luci https://git.openwrt.org/project/luci.git
-        src-git routing https://git.openwrt.org/feed/routing.git
-        src-git telephony https://git.openwrt.org/feed/telephony.git
         EOF
 
     - name: 执行自定义脚本 op1.sh（可选）
-      if: env.DIY_P1_SH != ''
+      if: env.DIY_P1_SH != '' && hashFiles(env.DIY_P1_SH) != ''
       run: |
         chmod +x $DIY_P1_SH
         cd openwrt
@@ -60,7 +58,7 @@ jobs:
       run: cd openwrt && ./scripts/feeds update -a
 
     - name: 执行自定义脚本 op3.sh（可选）
-      if: env.DIY_P3_SH != ''
+      if: env.DIY_P3_SH != '' && hashFiles(env.DIY_P3_SH) != ''
       run: |
         chmod +x $DIY_P3_SH
         cd openwrt
@@ -74,18 +72,30 @@ jobs:
         cd openwrt
         mkdir -p package/my
         # OpenClash
-        git clone https://github.com/vernesong/OpenClash.git package/my/luci-app-openclash
+        git clone https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
+        if [ -d package/my/openclash-tmp/luci-app-openclash ]; then
+          mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
+        else
+          mv package/my/openclash-tmp package/my/luci-app-openclash
+        fi
+        rm -rf package/my/openclash-tmp
+        
         # Argon 主题
         git clone https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
+        
         # MosDNS（包含主程序和 LuCI 界面）
-        git clone https://github.com/sbwml/luci-app-mosdns.git package/my/luci-app-mosdns-tmp
-        cp -r package/my/luci-app-mosdns-tmp/mosdns package/my/mosdns
-        cp -r package/my/luci-app-mosdns-tmp/luci-app-mosdns package/my/luci-app-mosdns
-        rm -rf package/my/luci-app-mosdns-tmp
+        git clone https://github.com/sbwml/luci-app-mosdns.git package/my/mosdns-tmp
+        if [ -d package/my/mosdns-tmp/mosdns ]; then
+          mv package/my/mosdns-tmp/mosdns package/my/mosdns
+        fi
+        if [ -d package/my/mosdns-tmp/luci-app-mosdns ]; then
+          mv package/my/mosdns-tmp/luci-app-mosdns package/my/luci-app-mosdns
+        fi
+        rm -rf package/my/mosdns-tmp
         echo "已克隆插件源码"
 
     - name: 执行自定义脚本 op2.sh（可选）
-      if: env.DIY_P2_SH != ''
+      if: env.DIY_P2_SH != '' && hashFiles(env.DIY_P2_SH) != ''
       run: |
         chmod +x $DIY_P2_SH
         cd openwrt
