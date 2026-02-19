@@ -19,7 +19,7 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@main
 
-    - name: 初始化编译环境
+    - name: 初始化环境
       run: |
         sudo apt update
         sudo apt install -y build-essential clang flex bison g++ gawk \
@@ -35,21 +35,20 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: 加载玩客云相关文件
+    - name: 加载玩客云文件
       run: |
         [ -e target ] && cp -rf target openwrt/
 
-    - name: 生成 feeds.conf.default（使用 ImmortalWrt 源）
+    - name: 生成 feeds.conf.default（只添加 passwall 源）
       run: |
         cd openwrt
-        [ -f feeds.conf.default ] && mv feeds.conf.default feeds.conf.default.bak
-        cat > feeds.conf.default << 'EOF'
+        cat > feeds.conf.default << EOF
         src-git packages https://git.openwrt.org/feed/packages.git
         src-git luci https://git.openwrt.org/project/luci.git
         src-git routing https://git.openwrt.org/feed/routing.git
         src-git telephony https://git.openwrt.org/feed/telephony.git
-        src-git immortalwrt_luci https://github.com/immortalwrt/luci.git
-        src-git immortalwrt_packages https://github.com/immortalwrt/packages.git
+        src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall.git;packages
+        src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;luci
         EOF
 
     - name: 执行自定义脚本 op1.sh
@@ -58,37 +57,28 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: 更新 feeds（带重试）
-      run: |
-        cd openwrt
-        for i in {1..3}; do
-          echo "Attempt $i to update feeds..."
-          if ./scripts/feeds update -a; then
-            exit 0
-          fi
-          echo "Update failed, waiting 10 seconds before retry..."
-          sleep 10
-        done
-        echo "All attempts failed" && exit 1
-
-    - name: 执行自定义脚本 op3.sh
-      run: |
-        chmod +x $DIY_P3_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P3_SH
-
-    - name: 再次更新 feeds
+    - name: 更新 feeds（忽略错误，尝试继续）
+      continue-on-error: true
       run: cd openwrt && ./scripts/feeds update -a
+
+    - name: 手动克隆 openclash 源码（如果 feeds 安装失败）
+      run: |
+        cd openwrt
+        # 如果 passwall 源中没有 openclash，可以手动从 vernesong 的仓库克隆
+        if [ ! -d package/feeds/passwall_luci/luci-app-openclash ]; then
+          git clone https://github.com/vernesong/OpenClash.git package/openclash
+          # 将 luci-app-openclash 移动到正确位置（根据实际仓库结构调整）
+          cp -r package/openclash/luci-app-openclash package/feeds/passwall_luci/ || true
+        fi
 
     - name: 安装需要的包
       run: |
         cd openwrt
-        # 优先从 immortalwrt 源安装
-        ./scripts/feeds install -p immortalwrt_luci luci-app-openclash luci-theme-argon
-        ./scripts/feeds install -p immortalwrt_packages mosdns luci-app-mosdns
+        ./scripts/feeds install -p passwall_luci luci-app-openclash luci-theme-argon
+        ./scripts/feeds install -p passwall_packages mosdns luci-app-mosdns
         echo "=== 检查安装结果 ==="
-        ls -la package/feeds/immortalwrt_luci/ || true
-        ls -la package/feeds/immortalwrt_packages/ || true
+        ls -la package/feeds/passwall_luci/ || true
+        ls -la package/feeds/passwall_packages/ || true
 
     - name: 加载自定义配置
       run: |
@@ -110,27 +100,23 @@ jobs:
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: 显式构建工具链
-      run: |
-        cd openwrt
-        make toolchain/compile -j$(nproc) V=s
+    - name: 编译工具链
+      run: cd openwrt && make toolchain/compile -j$(nproc) V=s
 
-    - name: 编译指定的插件
+    - name: 编译插件
       id: compile
       run: |
         cd openwrt
-        # 定义需要编译的包列表（按实际安装后的路径）
+        # 定义包列表
         PACKAGES="luci-app-openclash mosdns luci-app-mosdns luci-theme-argon"
         for pkg in $PACKAGES; do
           echo "尝试编译 $pkg ..."
-          if make package/feeds/immortalwrt_luci/$pkg/compile -j$(nproc) V=s; then
-            echo "$pkg 编译成功（来自 immortalwrt_luci）"
-          elif make package/feeds/immortalwrt_packages/$pkg/compile -j$(nproc) V=s; then
-            echo "$pkg 编译成功（来自 immortalwrt_packages）"
-          elif make package/feeds/luci/$pkg/compile -j$(nproc) V=s; then
-            echo "$pkg 编译成功（来自官方 luci）"
-          elif make package/feeds/packages/$pkg/compile -j$(nproc) V=s; then
-            echo "$pkg 编译成功（来自官方 packages）"
+          if make package/feeds/passwall_luci/$pkg/compile -j$(nproc) V=s; then
+            echo "$pkg 编译成功（passwall_luci）"
+          elif make package/feeds/passwall_packages/$pkg/compile -j$(nproc) V=s; then
+            echo "$pkg 编译成功（passwall_packages）"
+          elif make package/$pkg/compile -j$(nproc) V=s; then
+            echo "$pkg 编译成功（package/）"
           else
             echo "错误：无法编译 $pkg，请检查包名或 feeds 安装情况。"
             exit 1
@@ -138,7 +124,7 @@ jobs:
         done
         echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: 收集生成的 ipk 包
+    - name: 收集 ipk
       id: collect
       run: |
         cd openwrt
@@ -150,14 +136,14 @@ jobs:
         echo "PKG_DIR=$PWD/packages_collected" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: 上传 ipk 包到 Artifact
+    - name: 上传 Artifact
       uses: actions/upload-artifact@main
       if: steps.collect.outputs.status == 'success'
       with:
         name: openwrt-packages-${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.PKG_DIR }}/*.ipk
 
-    - name: 上传 ipk 包到 Releases
+    - name: 上传 Release
       uses: softprops/action-gh-release@master
       if: steps.collect.outputs.status == 'success'
       env:
@@ -165,17 +151,3 @@ jobs:
       with:
         tag_name: packages-${{ github.run_number }}
         files: ${{ env.PKG_DIR }}/*.ipk
-
-    - name: 清理旧 workflow 运行记录
-      uses: Mattraks/delete-workflow-runs@main
-      with:
-        retain_days: 1
-        keep_minimum_runs: 3
-
-    - name: 删除旧 Releases
-      uses: dev-drprasad/delete-older-releases@master
-      with:
-        keep_latest: 3
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
