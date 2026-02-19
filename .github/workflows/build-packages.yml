@@ -1,36 +1,43 @@
-name: Build OpenWrt Packages (OpenClash, MosDNS, Argon)
+name: Build OneCloud Firmware & Packages
 
 on:
+  repository_dispatch:
   workflow_dispatch:
 
 env:
   REPO_URL: https://github.com/openwrt/openwrt
   REPO_BRANCH: v24.10.5
-  CUSTOM_CONFIG: config.plugins
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: .config
   DIY_P1_SH: op1.sh
   DIY_P2_SH: op2.sh
   DIY_P3_SH: op3.sh
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_PACKAGES: true
+  UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
 jobs:
-  build-packages:
+  build:
     runs-on: ubuntu-latest
+    
     steps:
-    - name: 检出代码
+    - name: 检出本地代码
       uses: actions/checkout@main
 
-    - name: 初始化编译环境并清理磁盘
+    - name: 初始化编译环境并深度清理磁盘
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install build-essential clang flex bison g++ gawk \
-          gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
-          python3-setuptools rsync swig unzip zlib1g-dev file wget curl
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
+        sudo apt-get update -y
+        sudo apt-get install -y build-essential clang flex bison g++ gawk \
+          gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
+          python3-setuptools rsync swig unzip zlib1g-dev file wget curl android-sdk-libsparse-utils
+        sudo apt-get autoremove --purge -y
+        sudo apt-get clean
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
@@ -41,24 +48,19 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: 加载玩客云专用文件（如果有）
+    - name: 加载玩客云专用内核与设备树 (meson8b target)
       run: |
+        # 必须从本地仓库注入 target，官方库无完整的玩客云支持
         [ -e target ] && cp -rf target openwrt/
 
-    - name: 生成 feeds.conf.default
+    - name: 加载自定义 feeds 及执行 op1.sh
       run: |
-        cd openwrt
-        cat > feeds.conf.default << EOF
-        src-git packages https://github.com/openwrt/packages.git
-        src-git luci https://github.com/openwrt/luci.git
-        EOF
-
-    - name: 执行自定义脚本 op1.sh
-      if: env.DIY_P1_SH != '' && hashFiles(env.DIY_P1_SH) != ''
-      run: |
-        chmod +x $DIY_P1_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        if [ -f "$DIY_P1_SH" ]; then
+          chmod +x $DIY_P1_SH
+          cd openwrt
+          $GITHUB_WORKSPACE/$DIY_P1_SH
+        fi
 
     - name: 更新并安装 feeds
       run: |
@@ -66,25 +68,14 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 执行自定义脚本 op3.sh
-      if: env.DIY_P3_SH != '' && hashFiles(env.DIY_P3_SH) != ''
-      run: |
-        chmod +x $DIY_P3_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P3_SH
-
-    - name: 克隆插件源码
+    - name: 克隆特定插件源码 (OpenClash, MosDNS, Argon)
       run: |
         cd openwrt
         mkdir -p package/my
         
         # OpenClash
         git clone --depth=1 https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
-        if [ -d package/my/openclash-tmp/luci-app-openclash ]; then
-          mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
-        else
-          mv package/my/openclash-tmp package/my/luci-app-openclash
-        fi
+        [ -d package/my/openclash-tmp/luci-app-openclash ] && mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash || mv package/my/openclash-tmp package/my/luci-app-openclash
         rm -rf package/my/openclash-tmp
         
         # Argon 主题
@@ -96,64 +87,134 @@ jobs:
         [ -d package/my/mosdns-tmp/luci-app-mosdns ] && mv package/my/mosdns-tmp/luci-app-mosdns package/my/luci-app-mosdns
         rm -rf package/my/mosdns-tmp
 
-    - name: 执行自定义脚本 op2.sh
-      if: env.DIY_P2_SH != '' && hashFiles(env.DIY_P2_SH) != ''
+    - name: 加载自定义配置及执行 op2.sh
       run: |
-        chmod +x $DIY_P2_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
-
-    - name: 复制并展开配置文件
-      run: |
-        if [ -f "$CUSTOM_CONFIG" ]; then
-          cp "$CUSTOM_CONFIG" openwrt/.config
+        [ -e files ] && cp -r files openwrt/files
+        [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
+        if [ -f "$DIY_P2_SH" ]; then
+          chmod +x $DIY_P2_SH
           cd openwrt
-          make defconfig
-        else
-          echo "错误：未找到 $CUSTOM_CONFIG 文件！" && exit 1
+          $GITHUB_WORKSPACE/$DIY_P2_SH
         fi
 
     - name: 下载源码与依赖库
       run: |
         cd openwrt
+        make defconfig
         make download -j8
-        find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: 编译 OpenWrt 固件及插件
+    - name: 全局编译固件与插件 (黄金容错法则)
       id: compile
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        # 自动补全所有依赖并编译（先多核，若失败则单核重试）
-        make -j$(nproc) || make -j1 V=s
+        # 完整的依赖树解析：多核尝试 -> 单核尝试 -> 单核详细报错
+        make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: 收集生成的 ipk 包
-      id: collect
-      if: steps.compile.outputs.status == 'success'
+    - name: 收集编译生成的特定 IPK 包
+      id: collect_ipk
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_PACKAGES == 'true'
       run: |
         cd openwrt
         mkdir -p packages_collected
-        find bin/packages -name "*.ipk" -exec cp {} packages_collected/ \;
-        find bin/targets -name "*.ipk" -exec cp {} packages_collected/ \;
-        echo "DEVICE_NAME=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/')" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+        find bin/packages -name "*openclash*.ipk" -exec cp {} packages_collected/ \;
+        find bin/packages -name "*mosdns*.ipk" -exec cp {} packages_collected/ \;
+        find bin/packages -name "*v2ray-core*.ipk" -exec cp {} packages_collected/ \;
+        find bin/packages -name "*xray-core*.ipk" -exec cp {} packages_collected/ \;
+        find bin/packages -name "*argon*.ipk" -exec cp {} packages_collected/ \;
         echo "PKG_DIR=$PWD/packages_collected" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: 上传 ipk 包到 Artifact
+    - name: 打包生成玩客云直刷镜像 (.burn.img)
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        ver="v0.3.1"
+        curl -L -o ./AmlImg https://github.com/lxiaya/AmlImg/releases/download/$ver/AmlImg_${ver}_linux_amd64
+        chmod +x ./AmlImg
+        curl -L -o ./uboot.img https://github.com/lxiaya/u-boot-onecloud/releases/download/build-20230901-0443/eMMC.burn.img
+        ./AmlImg unpack ./uboot.img burn/
+        gunzip openwrt/bin/targets/*/*/*.gz
+        diskimg=$(ls openwrt/bin/targets/*/*/*.img)
+        loop=$(sudo losetup --find --show --partscan $diskimg)
+        img_ext="openwrt.img"
+        img_mnt="xd"
+        rootfs_mnt="img"
+        boot_img=$1${img_ext}
+        boot_img_mnt=$1${img_mnt}
+        rootfs_img_mnt=$1${rootfs_mnt}
+        sudo rm -rf ${boot_img} ${boot_img_mnt} ${rootfs_img_mnt}
+        sudo dd if=/dev/zero of=${boot_img} bs=1M count=400
+        sudo mkfs.ext4 ${boot_img}
+        sudo mkdir ${boot_img_mnt} ${rootfs_img_mnt}
+        sudo mount ${boot_img} ${boot_img_mnt}
+        sudo mount ${loop}p2 ${rootfs_img_mnt}
+        cd ${rootfs_img_mnt}
+        sudo cp -r * ../${boot_img_mnt}
+        cd ..
+        sudo sync
+        sudo umount ${boot_img_mnt} ${rootfs_img_mnt}
+        sudo img2simg ${loop}p1 burn/boot.simg
+        sudo img2simg openwrt.img burn/rootfs.simg
+        sudo rm -rf *.img
+        sudo losetup -d $loop
+        cat <<EOF >>burn/commands.txt
+        PARTITION:boot:sparse:boot.simg
+        PARTITION:rootfs:sparse:rootfs.simg
+        EOF
+        prefix=$(ls openwrt/bin/targets/*/*/*.img | sed 's/\.img$//')
+        burnimg=${prefix}.burn.img
+        ./AmlImg pack $burnimg burn/
+        for f in openwrt/bin/targets/*/*/*.burn.img; do
+          sha256sum "$f" >"${f}.sha"
+          xz -9 --threads=0 --compress "$f"
+        done
+        sudo rm -rf openwrt/bin/targets/*/*/*.img openwrt/bin/targets/*/*/*.gz
+
+    - name: 整理最终固件文件
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: 上传 IPK 插件包到 Artifacts
       uses: actions/upload-artifact@main
-      if: steps.collect.outputs.status == 'success'
+      if: steps.collect_ipk.outputs.status == 'success'
       with:
-        name: openwrt-packages-${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        name: OneCloud_IPK_Packages${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.PKG_DIR }}/*.ipk
 
-    - name: 上传 ipk 包到 Releases
+    - name: 上传线刷固件到 Artifacts
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: OneCloud_Firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}/*.burn.img.xz
+
+    - name: 生成 Release 标签
+      id: tag
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      run: |
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        touch release.txt
+        echo "包含 OpenClash, MosDNS, Argon 的玩客云直刷包及独立 IPK" >> release.txt
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: 发布至 Releases
       uses: softprops/action-gh-release@master
-      if: steps.collect.outputs.status == 'success'
+      if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: packages-${{ github.run_number }}
-        files: ${{ env.PKG_DIR }}/*.ipk
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        body_path: release.txt
+        files: |
+          ${{ env.FIRMWARE }}/*.burn.img.xz
+          ${{ env.PKG_DIR }}/*.ipk
