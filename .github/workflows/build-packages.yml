@@ -39,14 +39,17 @@ jobs:
       run: |
         [ -e target ] && cp -rf target openwrt/
 
-    - name: 生成 feeds.conf.default（精简源）
+    - name: 生成 feeds.conf.default（使用 ImmortalWrt 源）
       run: |
         cd openwrt
         [ -f feeds.conf.default ] && mv feeds.conf.default feeds.conf.default.bak
-        cat > feeds.conf.default << EOF
+        cat > feeds.conf.default << 'EOF'
         src-git packages https://git.openwrt.org/feed/packages.git
         src-git luci https://git.openwrt.org/project/luci.git
-        src-git kenzo https://github.com/kenzok8/openwrt-packages
+        src-git routing https://git.openwrt.org/feed/routing.git
+        src-git telephony https://git.openwrt.org/feed/telephony.git
+        src-git immortalwrt_luci https://github.com/immortalwrt/luci.git
+        src-git immortalwrt_packages https://github.com/immortalwrt/packages.git
         EOF
 
     - name: 执行自定义脚本 op1.sh
@@ -77,15 +80,15 @@ jobs:
     - name: 再次更新 feeds
       run: cd openwrt && ./scripts/feeds update -a
 
-    - name: 安装需要的包（明确指定源，并调试）
+    - name: 安装需要的包
       run: |
         cd openwrt
-        ./scripts/feeds install -p kenzo luci-app-openclash mosdns luci-app-mosdns luci-theme-argon
+        # 优先从 immortalwrt 源安装
+        ./scripts/feeds install -p immortalwrt_luci luci-app-openclash luci-theme-argon
+        ./scripts/feeds install -p immortalwrt_packages mosdns luci-app-mosdns
         echo "=== 检查安装结果 ==="
-        echo "Contents of package/feeds/kenzo:"
-        ls -la package/feeds/kenzo/ || true
-        echo "Contents of package/feeds (all):"
-        ls -la package/feeds/ || true
+        ls -la package/feeds/immortalwrt_luci/ || true
+        ls -la package/feeds/immortalwrt_packages/ || true
 
     - name: 加载自定义配置
       run: |
@@ -112,18 +115,22 @@ jobs:
         cd openwrt
         make toolchain/compile -j$(nproc) V=s
 
-    - name: 编译指定的插件（尝试多个路径）
+    - name: 编译指定的插件
       id: compile
       run: |
         cd openwrt
-        # 定义需要编译的包列表
+        # 定义需要编译的包列表（按实际安装后的路径）
         PACKAGES="luci-app-openclash mosdns luci-app-mosdns luci-theme-argon"
         for pkg in $PACKAGES; do
           echo "尝试编译 $pkg ..."
-          if make package/feeds/kenzo/$pkg/compile -j$(nproc) V=s; then
-            echo "$pkg 编译成功（来自 feeds/kenzo）"
-          elif make package/$pkg/compile -j$(nproc) V=s; then
-            echo "$pkg 编译成功（来自 package/）"
+          if make package/feeds/immortalwrt_luci/$pkg/compile -j$(nproc) V=s; then
+            echo "$pkg 编译成功（来自 immortalwrt_luci）"
+          elif make package/feeds/immortalwrt_packages/$pkg/compile -j$(nproc) V=s; then
+            echo "$pkg 编译成功（来自 immortalwrt_packages）"
+          elif make package/feeds/luci/$pkg/compile -j$(nproc) V=s; then
+            echo "$pkg 编译成功（来自官方 luci）"
+          elif make package/feeds/packages/$pkg/compile -j$(nproc) V=s; then
+            echo "$pkg 编译成功（来自官方 packages）"
           else
             echo "错误：无法编译 $pkg，请检查包名或 feeds 安装情况。"
             exit 1
