@@ -39,7 +39,7 @@ jobs:
       run: |
         [ -e target ] && cp -rf target openwrt/
 
-    - name: 生成 feeds.conf.default（精简源，避免不必要的源）
+    - name: 生成 feeds.conf.default（精简源）
       run: |
         cd openwrt
         [ -f feeds.conf.default ] && mv feeds.conf.default feeds.conf.default.bak
@@ -55,7 +55,7 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: 更新 feeds（带重试，最多3次）
+    - name: 更新 feeds（带重试）
       run: |
         cd openwrt
         for i in {1..3}; do
@@ -74,15 +74,18 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P3_SH
 
-    - name: 再次更新 feeds（可选，但保留以防需要）
-      run: |
-        cd openwrt
-        ./scripts/feeds update -a
+    - name: 再次更新 feeds
+      run: cd openwrt && ./scripts/feeds update -a
 
-    - name: 安装需要的包（只安装你需要的，避免触发有问题的包）
+    - name: 安装需要的包（明确指定源，并调试）
       run: |
         cd openwrt
-        ./scripts/feeds install luci-app-openclash mosdns luci-app-mosdns luci-theme-argon
+        ./scripts/feeds install -p kenzo luci-app-openclash mosdns luci-app-mosdns luci-theme-argon
+        echo "=== 检查安装结果 ==="
+        echo "Contents of package/feeds/kenzo:"
+        ls -la package/feeds/kenzo/ || true
+        echo "Contents of package/feeds (all):"
+        ls -la package/feeds/ || true
 
     - name: 加载自定义配置
       run: |
@@ -104,23 +107,28 @@ jobs:
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: 显式构建工具链（确保 musl 等基础库正确）
+    - name: 显式构建工具链
       run: |
         cd openwrt
         make toolchain/compile -j$(nproc) V=s
 
-    - name: 编译指定的插件
+    - name: 编译指定的插件（尝试多个路径）
       id: compile
       run: |
         cd openwrt
-        # 编译 OpenClash
-        make package/feeds/kenzo/luci-app-openclash/compile -j$(nproc) V=s
-        # 编译 MosDNS 主程序
-        make package/feeds/kenzo/mosdns/compile -j$(nproc) V=s
-        # 编译 MosDNS 的 LuCI 界面
-        make package/feeds/kenzo/luci-app-mosdns/compile -j$(nproc) V=s
-        # 编译 Argon 主题
-        make package/feeds/kenzo/luci-theme-argon/compile -j$(nproc) V=s
+        # 定义需要编译的包列表
+        PACKAGES="luci-app-openclash mosdns luci-app-mosdns luci-theme-argon"
+        for pkg in $PACKAGES; do
+          echo "尝试编译 $pkg ..."
+          if make package/feeds/kenzo/$pkg/compile -j$(nproc) V=s; then
+            echo "$pkg 编译成功（来自 feeds/kenzo）"
+          elif make package/$pkg/compile -j$(nproc) V=s; then
+            echo "$pkg 编译成功（来自 package/）"
+          else
+            echo "错误：无法编译 $pkg，请检查包名或 feeds 安装情况。"
+            exit 1
+          fi
+        done
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: 收集生成的 ipk 包
