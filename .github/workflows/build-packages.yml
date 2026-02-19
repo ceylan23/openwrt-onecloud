@@ -7,7 +7,7 @@ env:
   REPO_URL: https://github.com/openwrt/openwrt
   REPO_BRANCH: v24.10.5
   CUSTOM_CONFIG: config.plugins
-  DIY_P1_SH: op1.sh      # 可选，若不需要可保留空或删除
+  DIY_P1_SH: op1.sh
   DIY_P2_SH: op2.sh
   DIY_P3_SH: op3.sh
   TZ: Asia/Shanghai
@@ -39,12 +39,12 @@ jobs:
       run: |
         [ -e target ] && cp -rf target openwrt/
 
-    - name: 生成 feeds.conf.default（仅 packages 和 luci 源，避免 telephony 问题）
+    - name: 生成 feeds.conf.default（使用 GitHub 镜像，更稳定）
       run: |
         cd openwrt
         cat > feeds.conf.default << EOF
-        src-git packages https://git.openwrt.org/feed/packages.git
-        src-git luci https://git.openwrt.org/project/luci.git
+        src-git packages https://github.com/openwrt/packages.git
+        src-git luci https://github.com/openwrt/luci.git
         EOF
 
     - name: 执行自定义脚本 op1.sh（可选）
@@ -54,8 +54,20 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: 更新 feeds
-      run: cd openwrt && ./scripts/feeds update -a
+    - name: 更新 feeds（带重试，允许失败）
+      run: |
+        cd openwrt
+        for i in {1..3}; do
+          echo "Attempt $i to update feeds..."
+          if ./scripts/feeds update -a; then
+            echo "Feeds update successful"
+            break
+          fi
+          echo "Update failed, waiting 10 seconds before retry..."
+          sleep 10
+        done
+        # 即使失败也继续，因为我们可以手动克隆插件
+        echo "Continuing even if feeds update failed."
 
     - name: 执行自定义脚本 op3.sh（可选）
       if: env.DIY_P3_SH != '' && hashFiles(env.DIY_P3_SH) != ''
@@ -64,8 +76,14 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P3_SH
 
-    - name: 安装所有 feeds
-      run: cd openwrt && ./scripts/feeds install -a
+    - name: 安装 feeds（如果成功）
+      run: |
+        cd openwrt
+        if [ -d feeds/packages ] || [ -d feeds/luci ]; then
+          ./scripts/feeds install -a
+        else
+          echo "Feeds not fully installed, skipping install."
+        fi
 
     - name: 克隆插件源码到 package/my/
       run: |
