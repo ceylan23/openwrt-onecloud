@@ -19,13 +19,19 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@main
 
-    - name: 初始化编译环境
+    - name: 初始化编译环境并清理磁盘
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo apt update
-        sudo apt install -y build-essential clang flex bison g++ gawk \
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install build-essential clang flex bison g++ gawk \
           gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
-          python3-setuptools rsync swig unzip zlib1g-dev file wget
-        sudo timedatectl set-timezone 'Asia/Shanghai'
+          python3-setuptools rsync swig unzip zlib1g-dev file wget curl
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
@@ -39,7 +45,7 @@ jobs:
       run: |
         [ -e target ] && cp -rf target openwrt/
 
-    - name: 生成 feeds.conf.default（使用 GitHub 镜像，更稳定）
+    - name: 生成 feeds.conf.default
       run: |
         cd openwrt
         cat > feeds.conf.default << EOF
@@ -47,50 +53,33 @@ jobs:
         src-git luci https://github.com/openwrt/luci.git
         EOF
 
-    - name: 执行自定义脚本 op1.sh（可选）
+    - name: 执行自定义脚本 op1.sh
       if: env.DIY_P1_SH != '' && hashFiles(env.DIY_P1_SH) != ''
       run: |
         chmod +x $DIY_P1_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: 更新 feeds（带重试，允许失败）
+    - name: 更新并安装 feeds
       run: |
         cd openwrt
-        for i in {1..3}; do
-          echo "Attempt $i to update feeds..."
-          if ./scripts/feeds update -a; then
-            echo "Feeds update successful"
-            break
-          fi
-          echo "Update failed, waiting 10 seconds before retry..."
-          sleep 10
-        done
-        # 即使失败也继续，因为我们可以手动克隆插件
-        echo "Continuing even if feeds update failed."
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
-    - name: 执行自定义脚本 op3.sh（可选）
+    - name: 执行自定义脚本 op3.sh
       if: env.DIY_P3_SH != '' && hashFiles(env.DIY_P3_SH) != ''
       run: |
         chmod +x $DIY_P3_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P3_SH
 
-    - name: 安装 feeds（如果成功）
-      run: |
-        cd openwrt
-        if [ -d feeds/packages ] || [ -d feeds/luci ]; then
-          ./scripts/feeds install -a
-        else
-          echo "Feeds not fully installed, skipping install."
-        fi
-
-    - name: 克隆插件源码到 package/my/
+    - name: 克隆插件源码
       run: |
         cd openwrt
         mkdir -p package/my
+        
         # OpenClash
-        git clone https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
+        git clone --depth=1 https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
         if [ -d package/my/openclash-tmp/luci-app-openclash ]; then
           mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
         else
@@ -99,61 +88,50 @@ jobs:
         rm -rf package/my/openclash-tmp
         
         # Argon 主题
-        git clone https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
+        git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
         
-        # MosDNS（包含主程序和 LuCI 界面）
-        git clone https://github.com/sbwml/luci-app-mosdns.git package/my/mosdns-tmp
-        if [ -d package/my/mosdns-tmp/mosdns ]; then
-          mv package/my/mosdns-tmp/mosdns package/my/mosdns
-        fi
-        if [ -d package/my/mosdns-tmp/luci-app-mosdns ]; then
-          mv package/my/mosdns-tmp/luci-app-mosdns package/my/luci-app-mosdns
-        fi
+        # MosDNS
+        git clone --depth=1 https://github.com/sbwml/luci-app-mosdns.git package/my/mosdns-tmp
+        [ -d package/my/mosdns-tmp/mosdns ] && mv package/my/mosdns-tmp/mosdns package/my/mosdns
+        [ -d package/my/mosdns-tmp/luci-app-mosdns ] && mv package/my/mosdns-tmp/luci-app-mosdns package/my/luci-app-mosdns
         rm -rf package/my/mosdns-tmp
-        echo "已克隆插件源码"
 
-    - name: 执行自定义脚本 op2.sh（可选）
+    - name: 执行自定义脚本 op2.sh
       if: env.DIY_P2_SH != '' && hashFiles(env.DIY_P2_SH) != ''
       run: |
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    - name: 复制配置文件
+    - name: 复制并展开配置文件
       run: |
         if [ -f "$CUSTOM_CONFIG" ]; then
           cp "$CUSTOM_CONFIG" openwrt/.config
-          echo "已使用 $CUSTOM_CONFIG 作为 .config"
+          cd openwrt
+          make defconfig
         else
           echo "错误：未找到 $CUSTOM_CONFIG 文件！" && exit 1
         fi
 
-    - name: 生成配置并下载源码
+    - name: 下载源码与依赖库
       run: |
         cd openwrt
-        make defconfig
         make download -j8
+        find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: 编译工具链
-      run: cd openwrt && make toolchain/compile -j$(nproc) V=s
-
-    - name: 编译插件
+    - name: 编译 OpenWrt 固件及插件
       id: compile
       run: |
         cd openwrt
-        # 编译 OpenClash
-        make package/my/luci-app-openclash/compile -j$(nproc) V=s
-        # 编译 Argon 主题
-        make package/my/luci-theme-argon/compile -j$(nproc) V=s
-        # 编译 MosDNS 主程序
-        make package/my/mosdns/compile -j$(nproc) V=s
-        # 编译 MosDNS 的 LuCI 界面
-        make package/my/luci-app-mosdns/compile -j$(nproc) V=s
+        echo -e "$(nproc) thread compile"
+        # 自动补全所有依赖并编译（先多核，若失败则单核重试）
+        make -j$(nproc) || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: 收集生成的 ipk 包
       id: collect
+      if: steps.compile.outputs.status == 'success'
       run: |
         cd openwrt
         mkdir -p packages_collected
