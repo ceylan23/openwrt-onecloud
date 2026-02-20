@@ -25,7 +25,6 @@ env:
 
 jobs:
   build:
-    # 【修复1】使用 ubuntu-22.04 解决依赖库丢失报错
     runs-on: ubuntu-22.04
     
     steps:
@@ -53,7 +52,7 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: Load onecloud (载入玩客云 target 目录)
+    - name: Load onecloud
       run: |
         [ -e target ] && cp -rf target openwrt/
 
@@ -64,7 +63,7 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: Use GitHub mirrors for feeds (【修复2】替换官方源，解决网络断流报错)
+    - name: Use GitHub mirrors for feeds
       run: |
         cd openwrt
         sed -i 's/git.openwrt.org\/feed\/packages.git/github.com\/openwrt\/packages.git/g' feeds.conf.default
@@ -87,30 +86,28 @@ jobs:
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
-    - name: Clone custom plugins (克隆第三方插件源码及依赖)
+    - name: Clone custom plugins (正确克隆核心插件与依赖)
       run: |
         cd openwrt
         mkdir -p package/my
         
-        # OpenClash
+        # 1. 彻底删除系统自带的 MosDNS feeds 防止冲突
+        rm -rf feeds/packages/net/mosdns
+        rm -rf feeds/luci/applications/luci-app-mosdns
+        rm -rf feeds/packages/net/v2ray-geodata
+        
+        # 2. OpenClash
         git clone --depth=1 https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
-        if [ -d package/my/openclash-tmp/luci-app-openclash ]; then
-          mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
-        else
-          mv package/my/openclash-tmp package/my/luci-app-openclash
-        fi
+        mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
         rm -rf package/my/openclash-tmp
         
-        # Argon 主题
+        # 3. Argon 主题
         git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
         
-        # MosDNS
-        git clone --depth=1 https://github.com/sbwml/luci-app-mosdns.git package/my/mosdns-tmp
-        [ -d package/my/mosdns-tmp/mosdns ] && mv package/my/mosdns-tmp/mosdns package/my/mosdns
-        [ -d package/my/mosdns-tmp/luci-app-mosdns ] && mv package/my/mosdns-tmp/luci-app-mosdns package/my/luci-app-mosdns
-        rm -rf package/my/mosdns-tmp
+        # 4. MosDNS v5 (完整克隆，绝对不能移动内层目录，保证 v2dat 存活)
+        git clone --depth=1 -b v5 https://github.com/sbwml/luci-app-mosdns.git package/my/luci-app-mosdns
         
-        # 【修复3】v2dat (MosDNS 核心依赖，解决 v2dat not exist 报错)
+        # 5. v2ray-geodata (MosDNS 和 V2raya 核心路由数据)
         git clone --depth=1 https://github.com/sbwml/v2ray-geodata.git package/my/v2ray-geodata
 
     - name: Load custom configuration
@@ -121,12 +118,10 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
         
-        # 【修复4】剔除自带的轻量 dnsmasq，避免与 dnsmasq-full 发生文件冲突踩踏
-        sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
-        sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
-        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        # 【核心操作】在底层逻辑中把 dnsmasq 开除出默认安装名单
+        sed -i 's/ dnsmasq / /g' include/target.mk
         
-        # 【修复5】自动扩容 ROOTFS 分区至 400MB，防止打包时报空间不足
+        # 自动扩容系统分区到 400M 防止打包空间不足
         sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config
 
     - name: Download package
@@ -134,10 +129,19 @@ jobs:
       run: |
         cd openwrt
         make defconfig
+        
+        # 【双保险】在 defconfig 补全依赖后，强制封杀基础版，启用 full 版
+        sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
+        sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
+        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        
+        # 再次执行让替换后的配置生效
+        make defconfig
+        
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Compile the firmware (全局容错编译)
+    - name: Compile the firmware
       id: compile
       run: |
         cd openwrt
@@ -148,7 +152,7 @@ jobs:
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: Generate direct burn (生成玩客云直刷镜像)
+    - name: Generate direct burn (生成直刷镜像)
       run: |
           sudo apt install android-sdk-libsparse-utils
           ver="v0.3.1"
@@ -194,7 +198,7 @@ jobs:
           done
           sudo rm -rf openwrt/bin/targets/*/*/*.img openwrt/bin/targets/*/*/*.gz
 
-    - name: Extract Packages (单独提取所需插件 IPK)
+    - name: Extract Packages (提取独立 IPK)
       if: env.UPLOAD_PACKAGES == 'true' && steps.compile.outputs.status == 'success'
       run: |
         cd openwrt
@@ -237,8 +241,8 @@ jobs:
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
-        echo "玩客云 (OneCloud) 直刷包及提取的独立 IPK 插件" >> release.txt
-        echo "包含: OpenClash, MosDNS, Argon 主题" >> release.txt
+        echo "玩客云 (OneCloud) 修复版编译固件及 IPK 插件" >> release.txt
+        echo "包含: OpenClash, MosDNS v5, Argon 主题" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware and packages to Releases
