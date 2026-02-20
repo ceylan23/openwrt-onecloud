@@ -104,11 +104,13 @@ jobs:
         # 3. Argon 主题
         git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
         
-        # 4. MosDNS v5 (完整克隆，绝对不能移动内层目录，保证 v2dat 存活)
+        # 4. MosDNS v5
         git clone --depth=1 -b v5 https://github.com/sbwml/luci-app-mosdns.git package/my/luci-app-mosdns
         
-        # 5. v2ray-geodata (MosDNS 和 V2raya 核心路由数据)
-        git clone --depth=1 https://github.com/sbwml/v2ray-geodata.git package/my/v2ray-geodata
+        # 5. v2ray-geodata (提取子目录，解决 v2dat 找不到的报错)
+        git clone --depth=1 https://github.com/sbwml/v2ray-geodata.git package/my/v2ray-geodata-tmp
+        mv package/my/v2ray-geodata-tmp/* package/my/
+        rm -rf package/my/v2ray-geodata-tmp
 
     - name: Load custom configuration
       run: |
@@ -118,10 +120,10 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
         
-        # 【核心操作】在底层逻辑中把 dnsmasq 开除出默认安装名单
+        # 开除系统默认自带的轻量级 dnsmasq
         sed -i 's/ dnsmasq / /g' include/target.mk
         
-        # 自动扩容系统分区到 400M 防止打包空间不足
+        # 自动扩容系统分区到 400M
         sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config
 
     - name: Download package
@@ -130,7 +132,7 @@ jobs:
         cd openwrt
         make defconfig
         
-        # 【双保险】在 defconfig 补全依赖后，强制封杀基础版，启用 full 版
+        # 双保险：强制封杀基础版，启用 full 版
         sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
         sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
@@ -202,11 +204,12 @@ jobs:
       if: env.UPLOAD_PACKAGES == 'true' && steps.compile.outputs.status == 'success'
       run: |
         cd openwrt
-        mkdir -p ../my_plugins
-        find bin/packages bin/targets -name "luci-app-openclash*.ipk" -exec cp {} ../my_plugins/ \;
-        find bin/packages bin/targets -name "*mosdns*.ipk" -exec cp {} ../my_plugins/ \;
-        find bin/packages bin/targets -name "luci-theme-argon*.ipk" -exec cp {} ../my_plugins/ \;
-        echo "PACKAGES_DIR=$PWD/../my_plugins" >> $GITHUB_ENV
+        # 【修复】使用系统绝对变量替换 .. 防止触发 Github 上传工具的相对路径阻断保护
+        mkdir -p $GITHUB_WORKSPACE/my_plugins
+        find bin/packages bin/targets -name "luci-app-openclash*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
+        find bin/packages bin/targets -name "*mosdns*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
+        find bin/packages bin/targets -name "luci-theme-argon*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
+        echo "PACKAGES_DIR=$GITHUB_WORKSPACE/my_plugins" >> $GITHUB_ENV
 
     - name: Check space usage
       if: (!cancelled())
