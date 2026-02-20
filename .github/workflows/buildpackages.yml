@@ -25,7 +25,7 @@ env:
 
 jobs:
   build:
-    # 【核心修复1】指定使用 ubuntu-22.04，解决最新版找不到 gcc-multilib 的报错
+    # 【修复1】使用 ubuntu-22.04 解决依赖库丢失报错
     runs-on: ubuntu-22.04
     
     steps:
@@ -64,7 +64,7 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    - name: Use GitHub mirrors for feeds (【核心修复2】替换官方源，解决 early EOF 断流)
+    - name: Use GitHub mirrors for feeds (【修复2】替换官方源，解决网络断流报错)
       run: |
         cd openwrt
         sed -i 's/git.openwrt.org\/feed\/packages.git/github.com\/openwrt\/packages.git/g' feeds.conf.default
@@ -87,7 +87,7 @@ jobs:
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
-    - name: Clone custom plugins (克隆第三方插件源码)
+    - name: Clone custom plugins (克隆第三方插件源码及依赖)
       run: |
         cd openwrt
         mkdir -p package/my
@@ -109,6 +109,9 @@ jobs:
         [ -d package/my/mosdns-tmp/mosdns ] && mv package/my/mosdns-tmp/mosdns package/my/mosdns
         [ -d package/my/mosdns-tmp/luci-app-mosdns ] && mv package/my/mosdns-tmp/luci-app-mosdns package/my/luci-app-mosdns
         rm -rf package/my/mosdns-tmp
+        
+        # 【修复3】v2dat (MosDNS 核心依赖，解决 v2dat not exist 报错)
+        git clone --depth=1 https://github.com/sbwml/v2ray-geodata.git package/my/v2ray-geodata
 
     - name: Load custom configuration
       run: |
@@ -117,6 +120,14 @@ jobs:
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
+        
+        # 【修复4】剔除自带的轻量 dnsmasq，避免与 dnsmasq-full 发生文件冲突踩踏
+        sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
+        sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
+        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        
+        # 【修复5】自动扩容 ROOTFS 分区至 400MB，防止打包时报空间不足
+        sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config
 
     - name: Download package
       id: package
