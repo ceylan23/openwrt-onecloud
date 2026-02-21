@@ -120,7 +120,7 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
         
-        # 🟢 解决 IP 冲突：将 OpenWrt 默认 LAN IP 修改为 192.168.2.1，避开欧本随身WiFi的192.168.1.1
+        # 🟢 核心修复 1：解决 IP 冲突，将默认 LAN IP 改为 192.168.2.1，避开欧本随身WiFi
         sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
         
         # 开除系统默认自带的轻量级 dnsmasq
@@ -135,26 +135,28 @@ jobs:
         cd openwrt
         make defconfig
         
-        # ==================== 核心精简修改区 ====================
+        # ==================== 核心修改区 ====================
         
         # 1. dnsmasq 双保险：强制封杀基础版，启用 full 版
         sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
         sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
         
-        # 2. 🟢 ASR 芯片专属驱动与唤醒工具 (摒弃无效的QMI，只留RNDIS核心)
+        # 2. 🟢 核心修复 2：恢复原版完整 USB 驱动（完美适配欧本 ASR1803 的各种模式回退）
         echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
         echo "CONFIG_PACKAGE_usb-modeswitch-data=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-net-huawei-cdc-ncm=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
         
-        # 3. 🟢 现代实用插件增强 (针对 4G 路由和多设备抢网控制)
-        echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config # 断网自动重启网卡，应对随身WiFi断流
-        echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config      # 智能队列QoS，防止单设备下载导致全家卡顿
-        echo "CONFIG_PACKAGE_usbutils=y" >> .config          # lsusb 工具，排查 USB 识别情况
-        echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config     # Web 终端，免 SSH 工具直接网页敲命令
+        # 3. 🟢 现代实用插件增强 (防断流 + QoS管控 + Web调试)
+        echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+        echo "CONFIG_PACKAGE_usbutils=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
         
         # ====================================================
         
@@ -265,8 +267,8 @@ jobs:
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
         echo "玩客云 (OneCloud) 专属增强直刷固件" >> release.txt
-        echo "包含: 随身WiFi全套唤醒驱动(ASR专属), OpenClash, MosDNS v5, Watchcat, SQM, TTYD" >> release.txt
-        echo "默认管理 IP: 192.168.2.1" >> release.txt
+        echo "包含: 随身WiFi完整驱动(适配欧本/ASR/华为等), OpenClash, MosDNS v5, Watchcat, SQM, TTYD" >> release.txt
+        echo "默认管理 IP: 192.168.2.1 (已避开 192.168.1.1 冲突)" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware and packages to Releases
