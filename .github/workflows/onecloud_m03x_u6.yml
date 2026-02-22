@@ -1,9 +1,9 @@
 #
 # Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OneCloud with M03X & Tenda U6 (ZeroCD Ultimate Fix)
+# Description: Build OneCloud with M03X & Tenda U6 (Ultimate Fix + Dnsmasq Conflict Resolved)
 #
 
-name: Build OneCloud + Tenda U6 (Ultimate Fix)
+name: Build OneCloud + Tenda U6 (Ultimate Edition)
 
 on:
   repository_dispatch:
@@ -164,26 +164,31 @@ jobs:
         echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
         
+        # ==================== 🟢 强制解决 dnsmasq 冲突 ====================
+        sed -i '/CONFIG_PACKAGE_dnsmasq=y/d' .config
+        sed -i '/CONFIG_DEFAULT_dnsmasq=y/d' .config
+        echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
+        echo "# CONFIG_DEFAULT_dnsmasq is not set" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+
         # ==================== 🟢 注入自动化多重脱壳脚本 ====================
         
-        # 方案 A: Hotplug 即插即用触发 (精准打击，不误伤)
+        # 方案 A: Hotplug 即插即用触发
         mkdir -p package/base-files/files/etc/hotplug.d/usb/
         cat <<'EOF' > package/base-files/files/etc/hotplug.d/usb/99-tenda-u6-hotplug
         #!/bin/sh
         if [ "$ACTION" = "add" ]; then
             if lsusb | grep -qi "0bda:a192"; then
                 logger -t "Tenda-U6-Hotplug" "Found Tenda U6 DISK mode! Initiating multi-strike switch..."
-                # 尝试1：官方参数切换
                 /usr/bin/usb_modeswitch -v 0bda -p a192 -u 3 2>/dev/null
                 /usr/bin/usb_modeswitch -v 0bda -p a192 -K 2>/dev/null
-                # 尝试2：精准弹出虚拟光驱 (sr0)
                 /usr/bin/eject /dev/sr0 2>/dev/null
             fi
         fi
         EOF
         chmod +x package/base-files/files/etc/hotplug.d/usb/99-tenda-u6-hotplug
 
-        # 方案 B: 开机自动巡检 (防插着开机不触发的情况)
+        # 方案 B: 开机自动巡检保底
         mkdir -p package/base-files/files/etc/uci-defaults/
         cat <<'EOF' > package/base-files/files/etc/uci-defaults/99-tenda-u6-boot
         #!/bin/sh
@@ -302,6 +307,7 @@ jobs:
         echo "release_tag=U6-Ultimate-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
         echo "玩客云 (OneCloud) 终极双重护航直刷固件" >> release.txt
+        echo "修复核心：彻底解决 dnsmasq-full 编译冲突问题" >> release.txt
         echo "安全特性：加入精准 CD-ROM 识别与 eject 功能，锁定 0bda:a192，绝不误伤普通 U 盘" >> release.txt
         echo "自动化：热插拔监控 + 开机巡检双重自动化脱壳脚本内置" >> release.txt
         echo "包含插件: OpenClash, MosDNS v5, Watchcat, SQM, TTYD" >> release.txt
