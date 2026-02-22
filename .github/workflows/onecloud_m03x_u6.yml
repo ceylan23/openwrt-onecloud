@@ -1,9 +1,9 @@
 #
 # Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OneCloud with M03X & Tenda U6 (Ultimate Fix + Dnsmasq Conflict Resolved)
+# Description: Build OneCloud with M03X & Tenda U6 (Kernel 6.6 + Multi-Plan Fix)
 #
 
-name: Build OneCloud + Tenda U6 (Ultimate Edition)
+name: Build OneCloud + Tenda U6 (Kernel 6.6 Edition)
 
 on:
   repository_dispatch:
@@ -117,9 +117,6 @@ jobs:
         # 🟢 解决 IP 冲突：将默认 LAN IP 改为 192.168.2.1
         sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
         
-        # 开除系统默认自带的轻量级 dnsmasq
-        sed -i 's/ dnsmasq / /g' include/target.mk
-        
         # 自动扩容系统分区到 400M
         sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config
 
@@ -129,75 +126,98 @@ jobs:
         cd openwrt
         make defconfig
         
-        # ==================== 核心驱动与多重防U盘工具区 ====================
+        # ==================== 核心驱动区 ====================
         
-        # 1. OpenWrt 原生底层切换工具集
+        # 1. 底层脱壳与光驱弹出工具链
         echo "CONFIG_PACKAGE_usbmode=y" >> .config
         echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
         echo "CONFIG_PACKAGE_usb-modeswitch-data=y" >> .config
-        
-        # 2. 🟢 暴力破解虚拟光驱驱动支持 (严格区分普通U盘和虚拟CD-ROM)
         echo "CONFIG_PACKAGE_eject=y" >> .config
         echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
         echo "CONFIG_PACKAGE_kmod-scsi-cdrom=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
         
-        # 3. 欧本 M03X 随身WiFi 驱动
+        # 2. 欧本 M03X 随身WiFi 驱动
         echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-net-huawei-cdc-ncm=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
         
-        # 4. 腾达 U6 驱动与闭源固件
-        echo "CONFIG_PACKAGE_kmod-rtl8192fu=y" >> .config
+        # 3. 🟢 腾达 U6 驱动大换血：适配 Kernel 6.6 的官方整合驱动
+        # 彻底移除旧版 8192fu，换用内核原生的 rtl8xxxu
+        sed -i '/CONFIG_PACKAGE_kmod-rtl8192fu=y/d' .config
+        echo "CONFIG_PACKAGE_kmod-rtl8xxxu=y" >> .config
         echo "CONFIG_PACKAGE_rtl8192fu-firmware=y" >> .config
         echo "CONFIG_PACKAGE_kmod-mac80211=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-cfg80211=y" >> .config
         echo "CONFIG_PACKAGE_wpad-basic-mbedtls=y" >> .config
         echo "CONFIG_PACKAGE_wireless-tools=y" >> .config
         echo "CONFIG_PACKAGE_iw=y" >> .config
         
-        # 5. 实用插件增强
+        # 4. 实用插件增强
         echo "CONFIG_PACKAGE_usbutils=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
         
-        # ==================== 🟢 强制解决 dnsmasq 冲突 ====================
+        # 5. 🟢 强制解决 dnsmasq 冲突
         sed -i '/CONFIG_PACKAGE_dnsmasq=y/d' .config
         sed -i '/CONFIG_DEFAULT_dnsmasq=y/d' .config
         echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
         echo "# CONFIG_DEFAULT_dnsmasq is not set" >> .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
 
-        # ==================== 🟢 注入自动化多重脱壳脚本 ====================
+        # ==================== 🟢 注入海陆空四重脱壳脚本 ====================
         
-        # 方案 A: Hotplug 即插即用触发
+        # 方案 1: Hotplug 即插即用触发（四管齐下）
         mkdir -p package/base-files/files/etc/hotplug.d/usb/
         cat <<'EOF' > package/base-files/files/etc/hotplug.d/usb/99-tenda-u6-hotplug
         #!/bin/sh
-        if [ "$ACTION" = "add" ]; then
+        if [ "$ACTION" = "add" ] || [ "$ACTION" = "bind" ]; then
             if lsusb | grep -qi "0bda:a192"; then
-                logger -t "Tenda-U6-Hotplug" "Found Tenda U6 DISK mode! Initiating multi-strike switch..."
+                logger -t "Tenda-U6-Hotplug" "Found 0bda:a192 DISK mode! Engaging Multi-Plan Switch..."
+                
+                # 方案A: 原生自动扫描
+                /sbin/usbmode -s 2>/dev/null
+                
+                # 方案B: 经典模式切换指令
                 /usr/bin/usb_modeswitch -v 0bda -p a192 -u 3 2>/dev/null
                 /usr/bin/usb_modeswitch -v 0bda -p a192 -K 2>/dev/null
+                
+                # 方案C: 物理弹出虚拟光盘
                 /usr/bin/eject /dev/sr0 2>/dev/null
+                /usr/bin/eject /dev/sda 2>/dev/null
+                
+                # 方案D: 内核级 bConfigurationValue 覆写 (终极绝杀)
+                for dev in /sys/bus/usb/devices/*; do
+                    if grep -q "0bda" "$dev/idVendor" 2>/dev/null && grep -q "a192" "$dev/idProduct" 2>/dev/null; then
+                        logger -t "Tenda-U6-Hotplug" "Applying nuclear option: overriding bConfigurationValue on $dev"
+                        echo 1 > "$dev/bConfigurationValue" 2>/dev/null
+                    fi
+                done
             fi
         fi
         EOF
         chmod +x package/base-files/files/etc/hotplug.d/usb/99-tenda-u6-hotplug
 
-        # 方案 B: 开机自动巡检保底
+        # 方案 2: 开机自动巡检保底脚本（防开机错失时机）
         mkdir -p package/base-files/files/etc/uci-defaults/
         cat <<'EOF' > package/base-files/files/etc/uci-defaults/99-tenda-u6-boot
         #!/bin/sh
         (
             sleep 15
             if lsusb | grep -qi "0bda:a192"; then
-                logger -t "Tenda-U6-Boot" "Tenda U6 stuck in DISK mode on boot. Forcing switch..."
+                logger -t "Tenda-U6-Boot" "Tenda U6 stuck in DISK mode on boot. Re-triggering hotplug script..."
+                # 强行重新触发刚刚写好的热插拔脚本里的逻辑
                 /usr/bin/usb_modeswitch -v 0bda -p a192 -u 3 2>/dev/null
                 /usr/bin/eject /dev/sr0 2>/dev/null
+                for dev in /sys/bus/usb/devices/*; do
+                    if grep -q "0bda" "$dev/idVendor" 2>/dev/null && grep -q "a192" "$dev/idProduct" 2>/dev/null; then
+                        echo 1 > "$dev/bConfigurationValue" 2>/dev/null
+                    fi
+                done
             fi
         ) &
         exit 0
@@ -304,12 +324,11 @@ jobs:
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=U6-Ultimate-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        echo "release_tag=U6-Kernel6.6-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
-        echo "玩客云 (OneCloud) 终极双重护航直刷固件" >> release.txt
-        echo "修复核心：彻底解决 dnsmasq-full 编译冲突问题" >> release.txt
-        echo "安全特性：加入精准 CD-ROM 识别与 eject 功能，锁定 0bda:a192，绝不误伤普通 U 盘" >> release.txt
-        echo "自动化：热插拔监控 + 开机巡检双重自动化脱壳脚本内置" >> release.txt
+        echo "玩客云 (OneCloud) 极客硬刚版固件" >> release.txt
+        echo "驱动重构：彻底替换弃用的老驱动，采用原生 kmod-rtl8xxxu 拥抱 Linux 6.6 内核" >> release.txt
+        echo "火力全开：集成 usbmode + modeswitch + eject + bConfig 覆写四重自动化脱壳脚本" >> release.txt
         echo "包含插件: OpenClash, MosDNS v5, Watchcat, SQM, TTYD" >> release.txt
         echo "默认管理 IP: 192.168.2.1" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
