@@ -1,9 +1,9 @@
 #
 # Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OpenWrt for OneCloud with M03X & Tenda U6 (Fixed USB Mode)
+# Description: Build OneCloud with M03X & Tenda U6 (ZeroCD Auto-Eject Fix)
 #
 
-name: Build OneCloud + Tenda U6 (Fixed)
+name: Build OneCloud + Tenda U6 (Auto-Eject Fix)
 
 on:
   repository_dispatch:
@@ -91,23 +91,17 @@ jobs:
         cd openwrt
         mkdir -p package/my
         
-        # 彻底删除系统自带的 MosDNS feeds 防止冲突
+        # 删除系统自带 MosDNS 避免冲突
         rm -rf feeds/packages/net/mosdns
         rm -rf feeds/luci/applications/luci-app-mosdns
         rm -rf feeds/packages/net/v2ray-geodata
         
-        # OpenClash
+        # 插件拉取
         git clone --depth=1 https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
         mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
         rm -rf package/my/openclash-tmp
-        
-        # Argon 主题
         git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
-        
-        # MosDNS v5
         git clone --depth=1 -b v5 https://github.com/sbwml/luci-app-mosdns.git package/my/luci-app-mosdns
-        
-        # v2ray-geodata
         git clone --depth=1 https://github.com/sbwml/v2ray-geodata.git package/my/v2ray-geodata-tmp
         mv package/my/v2ray-geodata-tmp/* package/my/
         rm -rf package/my/v2ray-geodata-tmp
@@ -120,11 +114,8 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
         
-        # 🟢 解决 IP 冲突：将默认 LAN IP 改为 192.168.2.1
+        # 解决 IP 冲突：将默认 LAN IP 改为 192.168.2.1
         sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
-        
-        # 开除系统默认自带的轻量级 dnsmasq
-        sed -i 's/ dnsmasq / /g' include/target.mk
         
         # 自动扩容系统分区到 400M
         sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config
@@ -135,47 +126,57 @@ jobs:
         cd openwrt
         make defconfig
         
-        # ==================== 核心修复与修改区 ====================
+        # ==================== 核心驱动与防U盘工具区 ====================
         
-        # 1. 基础网络组件
-        sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
-        sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
-        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
-        
-        # 2. 🟢 强制固化：模式切换神仙工具与底层存储识别（解决 U 盘模式死循环）
+        # 1. OpenWrt 原生底层切换工具集
+        echo "CONFIG_PACKAGE_usbmode=y" >> .config
         echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
         echo "CONFIG_PACKAGE_usb-modeswitch-data=y" >> .config
+        
+        # 2. 🟢 暴力破解虚拟光驱神工具：eject 和 scsi 驱动
+        echo "CONFIG_PACKAGE_eject=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
         
-        # 3. 🟢 欧本 ASR1803 随身WiFi驱动保留
+        # 3. 欧本随身WiFi 驱动
         echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-net-huawei-cdc-ncm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
         
-        # 4. 🟢 腾达 U6 (RTL8192FU) 专属无线驱动与固件固化
+        # 4. 腾达 U6 驱动与闭源固件
         echo "CONFIG_PACKAGE_kmod-rtl8192fu=y" >> .config
-        echo "CONFIG_PACKAGE_rtl8192fu-firmware=y" >> .config  # 强制打包闭源固件
+        echo "CONFIG_PACKAGE_rtl8192fu-firmware=y" >> .config
         echo "CONFIG_PACKAGE_kmod-mac80211=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-cfg80211=y" >> .config
         echo "CONFIG_PACKAGE_wpad-basic-mbedtls=y" >> .config
-        echo "CONFIG_PACKAGE_iw=y" >> .config
         echo "CONFIG_PACKAGE_wireless-tools=y" >> .config
-        
-        # 5. 实用插件增强
-        echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
         echo "CONFIG_PACKAGE_usbutils=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
         
-        # ====================================================
+        # ==================== 🟢 注入自动化脱壳脚本 ====================
         
-        # 再次执行 defconfig 让注入的配置和依赖关系生效
+        mkdir -p package/base-files/files/etc/hotplug.d/usb/
+        cat <<'EOF' > package/base-files/files/etc/hotplug.d/usb/99-tenda-u6-fix
+        #!/bin/sh
+        if [ "$ACTION" = "add" ]; then
+            if lsusb | grep -qi "0bda:a192"; then
+                logger -t Tenda-U6 "Detected Tenda U6 in Windows DISK mode! Forcing ejection..."
+                # 方法1：原生 usbmode 尝试
+                /sbin/usbmode -s 2>/dev/null
+                # 方法2：暴力弹出虚拟光驱/U盘 (最有效)
+                eject /dev/sr0 2>/dev/null
+                eject /dev/sda 2>/dev/null
+                eject /dev/sdb 2>/dev/null
+            fi
+        fi
+        EOF
+        chmod +x package/base-files/files/etc/hotplug.d/usb/99-tenda-u6-fix
+        
+        # ===============================================================
+        
         make defconfig
-        
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
@@ -246,10 +247,6 @@ jobs:
         find bin/packages bin/targets -name "luci-theme-argon*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
         echo "PACKAGES_DIR=$GITHUB_WORKSPACE/my_plugins" >> $GITHUB_ENV
 
-    - name: Check space usage
-      if: (!cancelled())
-      run: df -hT
-
     - name: Upload specific Packages to Artifact
       uses: actions/upload-artifact@main
       if: env.UPLOAD_PACKAGES == 'true' && steps.compile.outputs.status == 'success'
@@ -277,12 +274,11 @@ jobs:
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=U6-Fixed-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        echo "release_tag=U6-AutoEject-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
         echo "玩客云 (OneCloud) 终极修复直刷固件" >> release.txt
-        echo "修复：固化 usb-modeswitch，彻底解决网卡变 U 盘问题" >> release.txt
-        echo "修复：固化 rtl8192fu 闭源驱动包，无需联网补环境" >> release.txt
-        echo "包含插件: OpenClash, MosDNS v5, Watchcat, SQM, TTYD" >> release.txt
+        echo "修复核心：注入开机自动化脱壳脚本与 eject 指令，终结腾达 U6 网卡变 U 盘的死循环" >> release.txt
+        echo "包含插件: OpenClash, MosDNS v5, TTYD" >> release.txt
         echo "默认管理 IP: 192.168.2.1" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
