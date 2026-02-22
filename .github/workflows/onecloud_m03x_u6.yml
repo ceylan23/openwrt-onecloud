@@ -1,9 +1,9 @@
 #
 # Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OpenWrt for OneCloud (meson8b) with Oben M03X & Tenda U6
+# Description: Build OpenWrt for OneCloud with M03X & Tenda U6 (Fixed USB Mode)
 #
 
-name: Build OneCloud + Tenda U6
+name: Build OneCloud + Tenda U6 (Fixed)
 
 on:
   repository_dispatch:
@@ -91,23 +91,23 @@ jobs:
         cd openwrt
         mkdir -p package/my
         
-        # 1. 彻底删除系统自带的 MosDNS feeds 防止冲突
+        # 彻底删除系统自带的 MosDNS feeds 防止冲突
         rm -rf feeds/packages/net/mosdns
         rm -rf feeds/luci/applications/luci-app-mosdns
         rm -rf feeds/packages/net/v2ray-geodata
         
-        # 2. OpenClash
+        # OpenClash
         git clone --depth=1 https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
         mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
         rm -rf package/my/openclash-tmp
         
-        # 3. Argon 主题
+        # Argon 主题
         git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
         
-        # 4. MosDNS v5
+        # MosDNS v5
         git clone --depth=1 -b v5 https://github.com/sbwml/luci-app-mosdns.git package/my/luci-app-mosdns
         
-        # 5. v2ray-geodata
+        # v2ray-geodata
         git clone --depth=1 https://github.com/sbwml/v2ray-geodata.git package/my/v2ray-geodata-tmp
         mv package/my/v2ray-geodata-tmp/* package/my/
         rm -rf package/my/v2ray-geodata-tmp
@@ -135,16 +135,20 @@ jobs:
         cd openwrt
         make defconfig
         
-        # ==================== 核心修改区 ====================
+        # ==================== 核心修复与修改区 ====================
         
-        # 1. dnsmasq 双保险：强制封杀基础版，启用 full 版
+        # 1. 基础网络组件
         sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
         sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
         
-        # 2. 🟢 恢复原版完整 USB 驱动（适配欧本 ASR1803 的各种模式回退）
+        # 2. 🟢 强制固化：模式切换神仙工具与底层存储识别（解决 U 盘模式死循环）
         echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
         echo "CONFIG_PACKAGE_usb-modeswitch-data=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
+        
+        # 3. 🟢 欧本 ASR1803 随身WiFi驱动保留
         echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y" >> .config
@@ -152,16 +156,16 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
         
-        # 3. 🟢 新增：腾达 U6 (RTL8192FU) 无线网卡驱动及基础无线组件
-        echo "CONFIG_PACKAGE_kmod-rtl8192fu=y" >> .config        # 核心驱动
-        echo "CONFIG_PACKAGE_kmod-rtl8xxxu=y" >> .config         # 备用兼容驱动 (Linux 6.x)
-        echo "CONFIG_PACKAGE_kmod-mac80211=y" >> .config         # Mac80211 核心
-        echo "CONFIG_PACKAGE_kmod-cfg80211=y" >> .config         # Cfg80211 核心
-        echo "CONFIG_PACKAGE_wpad-basic-mbedtls=y" >> .config    # 提供 WPA/WPA2 密码加密支持 (必需)
-        echo "CONFIG_PACKAGE_iw=y" >> .config                    # 无线配置底层工具
-        echo "CONFIG_PACKAGE_wireless-tools=y" >> .config        # iwconfig 等命令
+        # 4. 🟢 腾达 U6 (RTL8192FU) 专属无线驱动与固件固化
+        echo "CONFIG_PACKAGE_kmod-rtl8192fu=y" >> .config
+        echo "CONFIG_PACKAGE_rtl8192fu-firmware=y" >> .config  # 强制打包闭源固件
+        echo "CONFIG_PACKAGE_kmod-mac80211=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-cfg80211=y" >> .config
+        echo "CONFIG_PACKAGE_wpad-basic-mbedtls=y" >> .config
+        echo "CONFIG_PACKAGE_iw=y" >> .config
+        echo "CONFIG_PACKAGE_wireless-tools=y" >> .config
         
-        # 4. 🟢 现代实用插件增强 (防断流 + QoS管控 + Web调试)
+        # 5. 实用插件增强
         echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
         echo "CONFIG_PACKAGE_usbutils=y" >> .config
@@ -273,10 +277,11 @@ jobs:
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=U6-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        echo "release_tag=U6-Fixed-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
-        echo "玩客云 (OneCloud) + Tenda U6 专属直刷固件" >> release.txt
-        echo "包含: Oben随身WiFi完整驱动, 腾达U6 (RTL8192FU) 无线网卡驱动" >> release.txt
+        echo "玩客云 (OneCloud) 终极修复直刷固件" >> release.txt
+        echo "修复：固化 usb-modeswitch，彻底解决网卡变 U 盘问题" >> release.txt
+        echo "修复：固化 rtl8192fu 闭源驱动包，无需联网补环境" >> release.txt
         echo "包含插件: OpenClash, MosDNS v5, Watchcat, SQM, TTYD" >> release.txt
         echo "默认管理 IP: 192.168.2.1" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
