@@ -1,9 +1,9 @@
 #
-# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OneCloud with Kernel 5.10 (Full rtl8192fu Support & Fix Feeds)
+# Copyright (c) 2019-2026 P3TERX <https://p3terx.com>
+# Description: Build OneCloud 5.10 LTS (Ultimate Edition with OpenClash & MosDNS)
 #
 
-name: Build OneCloud 5.10 LTS (Feeds Fixed)
+name: Build OneCloud 5.10 LTS (Ultimate Edition)
 
 on:
   repository_dispatch:
@@ -13,7 +13,6 @@ env:
   REPO_URL: https://github.com/lunatickochiya/openwrt-22.03-s805
   REPO_BRANCH: openwrt-22.03.5
   FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: .config
   DIY_P1_SH: op1.sh
   DIY_P2_SH: op2.sh
   DIY_P3_SH: op3.sh
@@ -52,23 +51,16 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: 🟢 Fix Feeds (Remove Dead kiddin9 Source)
+    - name: 🟢 Fix and Clean Feeds (Nuclear Option)
       run: |
         cd openwrt
-        # 强制删除失效的 kiddin9 软件源，防止编译中断
-        sed -i '/kiddin9/d' feeds.conf.default
-        sed -i '/small/d' feeds.conf.default 2>/dev/null || true
-        # 确保基础官方源还在
-        grep -q "src-git packages" feeds.conf.default || echo "src-git packages https://git.openwrt.org/feed/packages.git;openwrt-22.03" >> feeds.conf.default
-        grep -q "src-git luci" feeds.conf.default || echo "src-git luci https://git.openwrt.org/project/luci.git;openwrt-22.03" >> feeds.conf.default
-        grep -q "src-git routing" feeds.conf.default || echo "src-git routing https://git.openwrt.org/feed/routing.git;openwrt-22.03" >> feeds.conf.default
-
-    - name: Use GitHub mirrors for feeds
-      run: |
-        cd openwrt
-        sed -i 's/git.openwrt.org\/feed\/packages.git/github.com\/openwrt\/packages.git/g' feeds.conf.default
-        sed -i 's/git.openwrt.org\/project\/luci.git/github.com\/openwrt\/luci.git/g' feeds.conf.default
-        sed -i 's/git.openwrt.org\/feed\/routing.git/github.com\/openwrt\/routing.git/g' feeds.conf.default
+        # 强制删除原作者的脏源，写入官方 22.03 纯净源
+        cat <<EOF > feeds.conf.default
+        src-git packages https://github.com/openwrt/packages.git;openwrt-22.03
+        src-git luci https://github.com/openwrt/luci.git;openwrt-22.03
+        src-git routing https://github.com/openwrt/routing.git;openwrt-22.03
+        src-git telephony https://github.com/openwrt/telephony.git;openwrt-22.03
+        EOF
 
     - name: Update and Install feeds
       run: |
@@ -76,21 +68,25 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Clone custom plugins
+    - name: Clone custom plugins (OpenClash & MosDNS)
       run: |
         cd openwrt
         mkdir -p package/my
         
-        # 删除系统自带 MosDNS 避免冲突
+        # 删除系统自带的旧版 MosDNS，避免冲突
         rm -rf feeds/packages/net/mosdns
         rm -rf feeds/luci/applications/luci-app-mosdns
         rm -rf feeds/packages/net/v2ray-geodata
         
-        # 插件拉取 (适配 22.03 分支)
+        # 拉取 OpenClash
         git clone --depth=1 https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
         mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
         rm -rf package/my/openclash-tmp
+        
+        # 拉取 Argon 主题
         git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
+        
+        # 拉取 MosDNS v5 及 GeoData
         git clone --depth=1 -b v5 https://github.com/sbwml/luci-app-mosdns.git package/my/luci-app-mosdns
         git clone --depth=1 https://github.com/sbwml/v2ray-geodata.git package/my/v2ray-geodata-tmp
         mv package/my/v2ray-geodata-tmp/* package/my/
@@ -99,35 +95,51 @@ jobs:
     - name: Load custom configuration
       run: |
         cd openwrt
+        [ -e ../files ] && mv ../files files
+        
+        # ⚠️ 绝对不拷贝旧的 .config 文件，彻底切断 6.6 内核污染！
+        
+        [ -e ../$DIY_P2_SH ] && chmod +x ../$DIY_P2_SH && ../$DIY_P2_SH
+        
         # 🟢 解决 IP 冲突：将默认 LAN IP 改为 192.168.2.1
         sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
         
-        # 自动扩容系统分区到 400M
-        sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config 2>/dev/null || true
+        # 开除系统默认自带的轻量级 dnsmasq
+        sed -i 's/ dnsmasq / /g' include/target.mk
 
-    - name: Download package and Inject Drivers
+    - name: Build New Configuration and Inject Drivers
       id: package
       run: |
         cd openwrt
         
-        # 生成玩客云基础配置
+        # 1. 强制生成玩客云基础框架
         echo "CONFIG_TARGET_meson=y" > .config
         echo "CONFIG_TARGET_meson_meson8b=y" >> .config
         echo "CONFIG_TARGET_meson_meson8b_DEVICE_thunder-onecloud=y" >> .config
         
         make defconfig
         
-        # ==================== 核心驱动区 (5.10 环境) ====================
+        # ==================== 核心驱动与插件配置区 ====================
         
-        # 1. 🟢 满血复活：启用第三方 rtl8192fu 性能驱动
+        # 2. 扩容与底层组件
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=400" >> .config
+        echo "CONFIG_PACKAGE_kmod-zram=y" >> .config
+        
+        # 3. 欧本随身WiFi与USB网络驱动
+        echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-net-huawei-cdc-ncm=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
+        
+        # 4. 腾达U6 满血无线驱动 (5.10专属)
         echo "CONFIG_PACKAGE_kmod-rtl8192fu=y" >> .config
         echo "CONFIG_PACKAGE_rtl8192fu-firmware=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-mac80211=y" >> .config
         echo "CONFIG_PACKAGE_wpad-basic-mbedtls=y" >> .config
         echo "CONFIG_PACKAGE_wireless-tools=y" >> .config
         echo "CONFIG_PACKAGE_iw=y" >> .config
         
-        # 2. 底层脱壳与光驱弹出工具链
+        # 5. 防U盘脱壳三剑客
         echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
         echo "CONFIG_PACKAGE_usb-modeswitch-data=y" >> .config
         echo "CONFIG_PACKAGE_eject=y" >> .config
@@ -136,19 +148,19 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
         
-        # 3. 欧本随身WiFi 驱动
-        echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-huawei-cdc-ncm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
-        
-        # 4. 插件增强与冲突解决
-        echo "CONFIG_PACKAGE_usbutils=y" >> .config
+        # 6. 用户点名的两大核心插件与辅助工具
+        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
+        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
+        echo "CONFIG_PACKAGE_usbutils=y" >> .config
         
+        # 7. dnsmasq 终极防冲突
         sed -i '/CONFIG_PACKAGE_dnsmasq=y/d' .config
+        sed -i '/CONFIG_DEFAULT_dnsmasq=y/d' .config
         echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
+        echo "# CONFIG_DEFAULT_dnsmasq is not set" >> .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
 
         # ==================== 🟢 注入自动化脱壳脚本 ====================
@@ -158,7 +170,7 @@ jobs:
         #!/bin/sh
         if [ "$ACTION" = "add" ] || [ "$ACTION" = "bind" ]; then
             if lsusb | grep -qi "0bda:a192"; then
-                logger -t "Tenda-U6" "Found 0bda:a192. Applying 5.10 classic fix..."
+                logger -t "Tenda-U6" "Virtual CD-ROM detected! Firing up 5.10 ejectors..."
                 /usr/bin/usb_modeswitch -v 0bda -p a192 -u 3 2>/dev/null
                 /usr/bin/usb_modeswitch -v 0bda -p a192 -K 2>/dev/null
                 /usr/bin/eject /dev/sr0 2>/dev/null
@@ -205,7 +217,7 @@ jobs:
           curl -L -o ./uboot.img https://github.com/lxiaya/u-boot-onecloud/releases/download/build-20230901-0443/eMMC.burn.img
           ./AmlImg unpack ./uboot.img burn/
           
-          # 适配 5.10 库的输出路径
+          # 适配 5.10 库的输出路径 (meson/meson8b)
           gunzip openwrt/bin/targets/meson/meson8b/*.gz || true
           diskimg=$(ls openwrt/bin/targets/meson/meson8b/*.img | head -n 1)
           loop=$(sudo losetup --find --show --partscan $diskimg)
@@ -261,12 +273,13 @@ jobs:
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=Kernel-5.10-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        echo "release_tag=Kernel-5.10-Ultimate-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
-        echo "玩客云 (OneCloud) 5.10 内核满血降维版" >> release.txt
-        echo "修复：剔除失效的 kiddin9 源，解决 feeds 报错" >> release.txt
-        echo "核心：内置禁用 ACA 引脚浮空检测补丁，彻底解决 USB 供电断流" >> release.txt
-        echo "驱动：kmod-rtl8192fu 完美适配，支持全性能热点模式" >> release.txt
+        echo "玩客云 (OneCloud) 5.10 内核满血毕业版" >> release.txt
+        echo "核心重构：隔离旧版配置污染，纯净引入官方 22.03 源" >> release.txt
+        echo "USB补丁：自带底层 Disable ACA 强启补丁，彻底告别断流" >> release.txt
+        echo "驱动插件：满血版 kmod-rtl8192fu + OpenClash + MosDNS v5" >> release.txt
+        echo "默认管理 IP: 192.168.2.1" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to Releases
