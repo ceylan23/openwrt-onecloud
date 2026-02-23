@@ -1,6 +1,6 @@
 #
 # Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OneCloud OpenWrt with Auto-Reboot & BBR
+# Description: Build OneCloud OpenWrt with Watchcat & BBR
 #
 
 name: Build OneCloud OpenWrt & Packages
@@ -115,10 +115,7 @@ jobs:
         # 6. AdGuard Home
         git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/my/luci-app-adguardhome
 
-        # 7. 🟢 新增：图形化定时重启插件
-        git clone --depth=1 https://github.com/sirpdboy/luci-app-autoreboot.git package/my/luci-app-autoreboot
-
-        # 8. 🟢 新增：Alpha Reborn 主题
+        # 7. Alpha Reborn 主题 (精简掉了所有不稳定的第三方拉取)
         git clone --depth=1 https://github.com/derisamedia/luci-theme-alpha-reborn.git package/my/luci-theme-alpha-reborn
 
     - name: Load custom configuration
@@ -156,21 +153,18 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
         
-        # 基础增强组件
+        # 基础增强组件 (Watchcat 就是官方的断网重启/定时重启插件！)
         echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
         echo "CONFIG_PACKAGE_usbutils=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
 
-        # 🟢 新增：开启自动重启与 UPnP
-        echo "CONFIG_PACKAGE_luci-app-autoreboot=y" >> .config
+        # 开启 UPnP 与 BBR
         echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-        
-        # 🟢 新增：注入 TCP BBR 拥塞控制底层模块 (替代繁杂的 TurboACC)
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         
-        # 🟢 新增：Alpha Reborn 主题编译支持
+        # Alpha Reborn 主题编译支持
         echo "CONFIG_PACKAGE_luci-theme-alpha-reborn=y" >> .config
         
         # ====================================================
@@ -246,7 +240,6 @@ jobs:
         find bin/packages bin/targets -name "*mosdns*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
         find bin/packages bin/targets -name "luci-theme-argon*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
         find bin/packages bin/targets -name "luci-theme-alpha-reborn*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
-        find bin/packages bin/targets -name "luci-app-autoreboot*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
         echo "PACKAGES_DIR=$GITHUB_WORKSPACE/my_plugins" >> $GITHUB_ENV
 
     - name: Check space usage
@@ -284,8 +277,8 @@ jobs:
         touch release.txt
         echo "玩客云 (OneCloud) 专属增强直刷固件" >> release.txt
         echo "包含: 随身WiFi驱动, OpenClash, MosDNS v5, AdGuard Home" >> release.txt
-        echo "优化: 核心 TCP BBR 加速, 定时重启, UPnP, Alpha-Reborn/Argon 主题" >> release.txt
-        echo "提示: 已移除不稳定的 TurboACC，请在后台开启系统自带的软件流量分流" >> release.txt
+        echo "优化: 核心 TCP BBR 加速, Watchcat, UPnP, Alpha-Reborn/Argon 主题" >> release.txt
+        echo "提示: 已移除非官方不稳定插件" >> release.txt
         echo "默认管理 IP: 192.168.2.1" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
