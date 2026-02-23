@@ -3,7 +3,7 @@
 # Description: Build OpenWrt for OneCloud (meson8b) with custom packages
 #
 
-name: Build OneCloud OpenWrt & Packages
+name: adguard
 
 on:
   repository_dispatch:
