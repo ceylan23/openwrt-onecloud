@@ -68,25 +68,29 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Clone custom plugins (OpenClash & MosDNS)
+    - name: Clone custom plugins & 🟢 Upgrade Golang
       run: |
         cd openwrt
         mkdir -p package/my
         
-        # 删除系统自带的旧版 MosDNS，避免冲突
+        # 1. 删除系统自带的旧版 MosDNS，避免冲突
         rm -rf feeds/packages/net/mosdns
         rm -rf feeds/luci/applications/luci-app-mosdns
         rm -rf feeds/packages/net/v2ray-geodata
         
-        # 拉取 OpenClash
+        # 2. 🟢 核心修复：强行升级 OpenWrt 22.03 的 Golang 编译器以支持 MosDNS v5
+        rm -rf feeds/packages/lang/golang
+        git clone https://github.com/sbwml/packages_lang_golang -b 22.x feeds/packages/lang/golang
+        
+        # 3. 拉取 OpenClash
         git clone --depth=1 https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
         mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
         rm -rf package/my/openclash-tmp
         
-        # 拉取 Argon 主题
+        # 4. 拉取 Argon 主题
         git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
         
-        # 拉取 MosDNS v5 及 GeoData
+        # 5. 拉取 MosDNS v5 及 GeoData
         git clone --depth=1 -b v5 https://github.com/sbwml/luci-app-mosdns.git package/my/luci-app-mosdns
         git clone --depth=1 https://github.com/sbwml/v2ray-geodata.git package/my/v2ray-geodata-tmp
         mv package/my/v2ray-geodata-tmp/* package/my/
@@ -96,8 +100,6 @@ jobs:
       run: |
         cd openwrt
         [ -e ../files ] && mv ../files files
-        
-        # ⚠️ 绝对不拷贝旧的 .config 文件，彻底切断 6.6 内核污染！
         
         [ -e ../$DIY_P2_SH ] && chmod +x ../$DIY_P2_SH && ../$DIY_P2_SH
         
@@ -277,6 +279,7 @@ jobs:
         touch release.txt
         echo "玩客云 (OneCloud) 5.10 内核满血毕业版" >> release.txt
         echo "核心重构：隔离旧版配置污染，纯净引入官方 22.03 源" >> release.txt
+        echo "环境修复：升级底层 Golang 编译器至 1.22+，完美编译 MosDNS v5" >> release.txt
         echo "USB补丁：自带底层 Disable ACA 强启补丁，彻底告别断流" >> release.txt
         echo "驱动插件：满血版 kmod-rtl8192fu + OpenClash + MosDNS v5" >> release.txt
         echo "默认管理 IP: 192.168.2.1" >> release.txt
