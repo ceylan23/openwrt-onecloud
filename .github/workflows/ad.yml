@@ -1,9 +1,9 @@
 #
 # Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OpenWrt for OneCloud (meson8b) with custom packages
+# Description: Build OneCloud OpenWrt with Auto-Reboot & BBR
 #
 
-name: adguard
+name: Build OneCloud OpenWrt & Packages
 
 on:
   repository_dispatch:
@@ -91,7 +91,7 @@ jobs:
         cd openwrt
         mkdir -p package/my
         
-        # 1. 彻底删除系统自带的 MosDNS feeds 防止冲突
+        # 1. 删除自带 MosDNS
         rm -rf feeds/packages/net/mosdns
         rm -rf feeds/luci/applications/luci-app-mosdns
         rm -rf feeds/packages/net/v2ray-geodata
@@ -112,11 +112,11 @@ jobs:
         mv package/my/v2ray-geodata-tmp/* package/my/
         rm -rf package/my/v2ray-geodata-tmp
 
-        # 6. AdGuard Home 去广告
+        # 6. AdGuard Home
         git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/my/luci-app-adguardhome
 
-        # 7. 🟢 修复：采用更新维护的 TurboACC 源码源
-        git clone --depth=1 https://github.com/sirpdboy/luci-app-turboacc.git package/my/luci-app-turboacc
+        # 7. 🟢 新增：图形化定时重启插件
+        git clone --depth=1 https://github.com/sirpdboy/luci-app-autoreboot.git package/my/luci-app-autoreboot
 
         # 8. 🟢 新增：Alpha Reborn 主题
         git clone --depth=1 https://github.com/derisamedia/luci-theme-alpha-reborn.git package/my/luci-theme-alpha-reborn
@@ -129,13 +129,8 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
         
-        # 核心修复 1：解决 IP 冲突，将默认 LAN IP 改为 192.168.2.1
         sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
-        
-        # 开除系统默认自带的轻量级 dnsmasq
         sed -i 's/ dnsmasq / /g' include/target.mk
-        
-        # 自动扩容系统分区到 400M
         sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config
 
     - name: Download package and Inject Drivers
@@ -146,12 +141,12 @@ jobs:
         
         # ==================== 核心修改区 ====================
         
-        # 1. dnsmasq 双保险：强制封杀基础版，启用 full 版
+        # dnsmasq 替换
         sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
         sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
         
-        # 2. 核心修复 2：恢复原版完整 USB 驱动（完美适配随身WiFi各种模式回退）
+        # 随身WiFi驱动恢复
         echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
         echo "CONFIG_PACKAGE_usb-modeswitch-data=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
@@ -161,28 +156,26 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
         
-        # 3. 现代实用插件增强
+        # 基础增强组件
         echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
         echo "CONFIG_PACKAGE_usbutils=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
-
-        # 4. 去广告与 DNS 优化
         echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
 
-        # 5. 网络加速与优化扩展
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config     # 开启 TCP BBR 拥塞控制
-        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config    # 开启 UPnP 端口自动转发
+        # 🟢 新增：开启自动重启与 UPnP
+        echo "CONFIG_PACKAGE_luci-app-autoreboot=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
         
-        # 6. 🟢 写入新主题配置
+        # 🟢 新增：注入 TCP BBR 拥塞控制底层模块 (替代繁杂的 TurboACC)
+        echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        
+        # 🟢 新增：Alpha Reborn 主题编译支持
         echo "CONFIG_PACKAGE_luci-theme-alpha-reborn=y" >> .config
         
         # ====================================================
         
-        # 再次执行 defconfig 让注入的配置和依赖关系生效
         make defconfig
-        
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
 
@@ -253,6 +246,7 @@ jobs:
         find bin/packages bin/targets -name "*mosdns*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
         find bin/packages bin/targets -name "luci-theme-argon*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
         find bin/packages bin/targets -name "luci-theme-alpha-reborn*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
+        find bin/packages bin/targets -name "luci-app-autoreboot*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
         echo "PACKAGES_DIR=$GITHUB_WORKSPACE/my_plugins" >> $GITHUB_ENV
 
     - name: Check space usage
@@ -290,7 +284,8 @@ jobs:
         touch release.txt
         echo "玩客云 (OneCloud) 专属增强直刷固件" >> release.txt
         echo "包含: 随身WiFi驱动, OpenClash, MosDNS v5, AdGuard Home" >> release.txt
-        echo "优化: TurboACC, BBR, UPnP, Alpha-Reborn/Argon双主题" >> release.txt
+        echo "优化: 核心 TCP BBR 加速, 定时重启, UPnP, Alpha-Reborn/Argon 主题" >> release.txt
+        echo "提示: 已移除不稳定的 TurboACC，请在后台开启系统自带的软件流量分流" >> release.txt
         echo "默认管理 IP: 192.168.2.1" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
