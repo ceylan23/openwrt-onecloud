@@ -115,8 +115,11 @@ jobs:
         # 6. AdGuard Home 去广告
         git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/my/luci-app-adguardhome
 
-        # 7. TurboACC 网络加速 (包含 BBR/Flow Offload 控制面板)
-        git clone --depth=1 https://github.com/chenhw2/luci-app-turboacc.git package/my/luci-app-turboacc
+        # 7. 🟢 修复：采用更新维护的 TurboACC 源码源
+        git clone --depth=1 https://github.com/sirpdboy/luci-app-turboacc.git package/my/luci-app-turboacc
+
+        # 8. 🟢 新增：Alpha Reborn 主题
+        git clone --depth=1 https://github.com/derisamedia/luci-theme-alpha-reborn.git package/my/luci-theme-alpha-reborn
 
     - name: Load custom configuration
       run: |
@@ -126,7 +129,7 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
         
-        # 核心修复 1：解决 IP 冲突，将默认 LAN IP 改为 192.168.2.1，避开欧本随身WiFi
+        # 核心修复 1：解决 IP 冲突，将默认 LAN IP 改为 192.168.2.1
         sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
         
         # 开除系统默认自带的轻量级 dnsmasq
@@ -148,7 +151,7 @@ jobs:
         sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
         
-        # 2. 核心修复 2：恢复原版完整 USB 驱动（完美适配欧本 ASR1803 的各种模式回退）
+        # 2. 核心修复 2：恢复原版完整 USB 驱动（完美适配随身WiFi各种模式回退）
         echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
         echo "CONFIG_PACKAGE_usb-modeswitch-data=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
@@ -158,7 +161,7 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
         
-        # 3. 现代实用插件增强 (防断流 + QoS管控 + Web调试)
+        # 3. 现代实用插件增强
         echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
         echo "CONFIG_PACKAGE_usbutils=y" >> .config
@@ -171,6 +174,9 @@ jobs:
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config     # 开启 TCP BBR 拥塞控制
         echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config    # 开启 UPnP 端口自动转发
+        
+        # 6. 🟢 写入新主题配置
+        echo "CONFIG_PACKAGE_luci-theme-alpha-reborn=y" >> .config
         
         # ====================================================
         
@@ -192,6 +198,7 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: Generate direct burn
+      if: steps.compile.outputs.status == 'success'
       run: |
           sudo apt install android-sdk-libsparse-utils
           ver="v0.3.1"
@@ -245,6 +252,7 @@ jobs:
         find bin/packages bin/targets -name "luci-app-openclash*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
         find bin/packages bin/targets -name "*mosdns*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
         find bin/packages bin/targets -name "luci-theme-argon*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
+        find bin/packages bin/targets -name "luci-theme-alpha-reborn*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
         echo "PACKAGES_DIR=$GITHUB_WORKSPACE/my_plugins" >> $GITHUB_ENV
 
     - name: Check space usage
@@ -260,7 +268,7 @@ jobs:
 
     - name: Organize firmware files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success'
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
@@ -269,27 +277,26 @@ jobs:
 
     - name: Upload firmware directory to Artifact
       uses: actions/upload-artifact@main
-      if: steps.organize.outputs.status == 'success' && !cancelled()
+      if: steps.organize.outputs.status == 'success'
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
     - name: Generate release tag
       id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success'
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
         echo "玩客云 (OneCloud) 专属增强直刷固件" >> release.txt
-        echo "包含: 随身WiFi完整驱动, OpenClash, MosDNS v5, AdGuard Home" >> release.txt
-        echo "优化: TurboACC加速, TCP BBR, UPnP, SQM, Watchcat (精简版不含VPN)" >> release.txt
-        echo "默认管理 IP: 192.168.2.1 (已避开 192.168.1.1 冲突)" >> release.txt
-        echo "注意：同时启用了多个 DNS 插件，请在后台手动规划 53 端口的转发链，避免冲突。" >> release.txt
+        echo "包含: 随身WiFi驱动, OpenClash, MosDNS v5, AdGuard Home" >> release.txt
+        echo "优化: TurboACC, BBR, UPnP, Alpha-Reborn/Argon双主题" >> release.txt
+        echo "默认管理 IP: 192.168.2.1" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware and packages to Releases
       uses: softprops/action-gh-release@master
-      if: steps.tag.outputs.status == 'success' && !cancelled()
+      if: steps.tag.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -301,6 +308,7 @@ jobs:
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
+      if: steps.compile.outputs.status == 'success'
       with:
         retain_days: 1
         keep_minimum_runs: 3
