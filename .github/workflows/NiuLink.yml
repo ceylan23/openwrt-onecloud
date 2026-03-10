@@ -1,9 +1,9 @@
 #
 # Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OneCloud OpenWrt for NiuLink PCDN (Lite Version)
+# Description: Build OneCloud OpenWrt for NiuLink PCDN (Ultimate Edition)
 #
 
-name: Build OneCloud OpenWrt & Packages
+name: Build OneCloud NiuLink-PCDN-Ultimate
 
 on:
   repository_dispatch:
@@ -19,7 +19,7 @@ env:
   DIY_P3_SH: op3.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
-  UPLOAD_PACKAGES: true
+  UPLOAD_PACKAGES: false
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
@@ -86,12 +86,11 @@ jobs:
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
-    - name: Clone custom plugins (Lite)
+    - name: Clone custom plugins (Argon Only)
       run: |
         cd openwrt
         mkdir -p package/my
-        
-        # 仅保留 Argon 主题，精简掉 OpenClash、MosDNS、AdGuard等无用高负载插件
+        # 仅保留 Argon 主题，精简其他，为 PCDN 留出最大内存
         git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
 
     - name: Load custom configuration
@@ -106,60 +105,53 @@ jobs:
         sed -i 's/ dnsmasq / /g' include/target.mk
         sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config
 
-    - name: Download package and Inject Drivers
+    - name: Download package and Inject Ultimate Drivers
       id: package
       run: |
         cd openwrt
         make defconfig
         
         # ==================== 核心修改区 ====================
-        
-        # dnsmasq 替换
         sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
         sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
         
-        # 随身WiFi驱动恢复 (保留以备不时之需)
-        echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
-        echo "CONFIG_PACKAGE_usb-modeswitch-data=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-huawei-cdc-ncm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
-        
-        # 基础增强组件
+        # 基础增强与主题
         echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
-        echo "CONFIG_PACKAGE_usbutils=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
-
-        # 开启 UPnP 与 BBR
         echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-        
-        # Argon 主题编译支持
         echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
         
-        # ==================== NiuLink PCDN 专属补丁 ====================
+        # ==================== NiuLink 终极全家桶补丁 ====================
         
-        # 解决 iptables cgroup 缺失报错
+        # 1. 网络与证书 (彻底告别 curl 下载失败)
+        echo "CONFIG_PACKAGE_curl=y" >> .config
+        echo "CONFIG_PACKAGE_wget-ssl=y" >> .config
+        echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
+        echo "CONFIG_PACKAGE_ca-certificates=y" >> .config
+        
+        # 2. 核心 Cgroup 防火墙模块 (生死攸关，解决跑量核心启动报错)
         echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
         echo "CONFIG_PACKAGE_kmod-ipt-extra=y" >> .config
         echo "CONFIG_PACKAGE_kmod-ipt-cgroup=y" >> .config
         
-        # 跑脚本必须的基础命令
+        # 3. 基础命令环境 (满足脚本的变态需求 tty, nohup 等)
         echo "CONFIG_PACKAGE_bash=y" >> .config
-        echo "CONFIG_PACKAGE_qrencode=y" >> .config
-        echo "CONFIG_PACKAGE_nmap=y" >> .config
         echo "CONFIG_PACKAGE_coreutils=y" >> .config
         echo "CONFIG_PACKAGE_coreutils-stat=y" >> .config
+        echo "CONFIG_PACKAGE_coreutils-tty=y" >> .config
+        echo "CONFIG_PACKAGE_coreutils-nohup=y" >> .config
+        echo "CONFIG_PACKAGE_nmap=y" >> .config
+        echo "CONFIG_PACKAGE_qrencode=y" >> .config
         
-        # 外挂硬盘与 ext4 挂载支持
+        # 4. 磁盘挂载与高级工具 (包含 chattr, lsblk 等排错神器)
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_block-mount=y" >> .config
         echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
+        echo "CONFIG_PACKAGE_chattr=y" >> .config
+        echo "CONFIG_PACKAGE_lsblk=y" >> .config
+        echo "CONFIG_PACKAGE_fdisk=y" >> .config
+        echo "CONFIG_PACKAGE_blkid=y" >> .config
         
         # ===============================================================
         
@@ -225,25 +217,6 @@ jobs:
           done
           sudo rm -rf openwrt/bin/targets/*/*/*.img openwrt/bin/targets/*/*/*.gz
 
-    - name: Extract Packages
-      if: env.UPLOAD_PACKAGES == 'true' && steps.compile.outputs.status == 'success'
-      run: |
-        cd openwrt
-        mkdir -p $GITHUB_WORKSPACE/my_plugins
-        find bin/packages bin/targets -name "luci-theme-argon*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
-        echo "PACKAGES_DIR=$GITHUB_WORKSPACE/my_plugins" >> $GITHUB_ENV
-
-    - name: Check space usage
-      if: (!cancelled())
-      run: df -hT
-
-    - name: Upload specific Packages to Artifact
-      uses: actions/upload-artifact@main
-      if: env.UPLOAD_PACKAGES == 'true' && steps.compile.outputs.status == 'success'
-      with:
-        name: OneCloud_Plugins_IPK${{ env.FILE_DATE }}
-        path: ${{ env.PACKAGES_DIR }}/*.ipk
-
     - name: Organize firmware files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success'
@@ -257,7 +230,7 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success'
       with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        name: OpenWrt_NiuLink_Ultimate_${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
     - name: Generate release tag
@@ -266,14 +239,14 @@ jobs:
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
-        echo "玩客云 (OneCloud) 专属增强直刷固件 (PCDN 极简版)" >> release.txt
-        echo "包含: NiuLink cgroup 补丁, ext4 挂载驱动, 随身WiFi驱动" >> release.txt
-        echo "优化: 核心 TCP BBR 加速, Watchcat, UPnP, Argon 主题" >> release.txt
-        echo "提示: 已移除非必需的高负载插件以节省内存资源" >> release.txt
-        echo "默认管理 IP: 192.168.2.1" >> release.txt
+        echo "🚀 玩客云 (OneCloud) NiuLink PCDN 终极跑量版" >> release.txt
+        echo "✅ 完美内置: curl, chattr, tty, nohup, cgroup 等 NiuLink 刚需组件" >> release.txt
+        echo "✅ 排错神器: 预装 lsblk, fdisk, blkid" >> release.txt
+        echo "✅ 极致精简: 剔除无用大插件，保留 Argon 主题，释放内存" >> release.txt
+        echo "💡 默认管理 IP: 192.168.2.1" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Upload firmware and packages to Releases
+    - name: Upload firmware to Releases
       uses: softprops/action-gh-release@master
       if: steps.tag.outputs.status == 'success'
       env:
@@ -281,9 +254,7 @@ jobs:
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
-        files: |
-          ${{ env.FIRMWARE }}/*
-          ${{ env.PACKAGES_DIR }}/*.ipk
+        files: ${{ env.FIRMWARE }}/*
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
