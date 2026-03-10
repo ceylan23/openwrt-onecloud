@@ -1,9 +1,9 @@
 #
 # Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OneCloud OpenWrt for NiuLink PCDN (Ultimate Edition)
+# Description: Build OneCloud OpenWrt for NiuLink PCDN (Ultimate v2.1 - With TTYD)
 #
 
-name: Build OneCloud NiuLink-PCDN-Ultimate
+name: Build OneCloud NiuLink-PCDN-Ultimate-v2.1
 
 on:
   repository_dispatch:
@@ -86,11 +86,10 @@ jobs:
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
-    - name: Clone custom plugins (Argon Only)
+    - name: Clone custom plugins
       run: |
         cd openwrt
         mkdir -p package/my
-        # 仅保留 Argon 主题，精简其他，为 PCDN 留出最大内存
         git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
 
     - name: Load custom configuration
@@ -105,55 +104,54 @@ jobs:
         sed -i 's/ dnsmasq / /g' include/target.mk
         sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config
 
-    - name: Download package and Inject Ultimate Drivers
+    - name: Download package and Inject Ultimate Drivers v2.1
       id: package
       run: |
         cd openwrt
         make defconfig
         
-        # ==================== 核心修改区 ====================
-        sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
-        sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
-        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        # ==================== 补全 NiuLink 核心依赖 ====================
         
-        # 基础增强与主题
-        echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
+        # 1. 网页终端 (加回去了！)
+        echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
         
-        # ==================== NiuLink 终极全家桶补丁 ====================
+        # 2. 解决 iptables 找不到的问题 (包含老版本兼容命令)
+        echo "CONFIG_PACKAGE_iptables=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-zz-legacy=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-extra=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-cgroup=y" >> .config
         
-        # 1. 网络与证书 (彻底告别 curl 下载失败)
+        # 3. 补全 JSON 处理工具 (脚本死穴)
+        echo "CONFIG_PACKAGE_jq=y" >> .config
+        
+        # 4. 补全下载与网络命令 (curl, wget-ssl 等)
         echo "CONFIG_PACKAGE_curl=y" >> .config
         echo "CONFIG_PACKAGE_wget-ssl=y" >> .config
         echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
         echo "CONFIG_PACKAGE_ca-certificates=y" >> .config
+        echo "CONFIG_PACKAGE_ip-full=y" >> .config
         
-        # 2. 核心 Cgroup 防火墙模块 (生死攸关，解决跑量核心启动报错)
-        echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-extra=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-cgroup=y" >> .config
-        
-        # 3. 基础命令环境 (满足脚本的变态需求 tty, nohup 等)
+        # 5. 补全脚本所需的底层命令
         echo "CONFIG_PACKAGE_bash=y" >> .config
         echo "CONFIG_PACKAGE_coreutils=y" >> .config
         echo "CONFIG_PACKAGE_coreutils-stat=y" >> .config
         echo "CONFIG_PACKAGE_coreutils-tty=y" >> .config
         echo "CONFIG_PACKAGE_coreutils-nohup=y" >> .config
-        echo "CONFIG_PACKAGE_nmap=y" >> .config
-        echo "CONFIG_PACKAGE_qrencode=y" >> .config
-        
-        # 4. 磁盘挂载与高级工具 (包含 chattr, lsblk 等排错神器)
-        echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
-        echo "CONFIG_PACKAGE_block-mount=y" >> .config
-        echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
         echo "CONFIG_PACKAGE_chattr=y" >> .config
         echo "CONFIG_PACKAGE_lsblk=y" >> .config
         echo "CONFIG_PACKAGE_fdisk=y" >> .config
-        echo "CONFIG_PACKAGE_blkid=y" >> .config
+        echo "CONFIG_PACKAGE_qrencode=y" >> .config
+        echo "CONFIG_PACKAGE_nmap=y" >> .config
         
-        # ===============================================================
+        # 6. 基础增强与主题
+        echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
+
+        # =============================================================
         
         make defconfig
         make download -j8
@@ -179,47 +177,31 @@ jobs:
           chmod +x ./AmlImg
           curl -L -o ./uboot.img https://github.com/lxiaya/u-boot-onecloud/releases/download/build-20230901-0443/eMMC.burn.img
           ./AmlImg unpack ./uboot.img burn/
-          echo "::endgroup::"
           gunzip openwrt/bin/targets/*/*/*.gz
-          diskimg=$(ls openwrt/bin/targets/*/*/*.img)
+          diskimg=$(ls openwrt/bin/targets/*/*/*.img | head -n 1)
           loop=$(sudo losetup --find --show --partscan $diskimg)
-          img_ext="openwrt.img"
-          img_mnt="xd"
-          rootfs_mnt="img"
-          boot_img=$1${img_ext}
-          boot_img_mnt=$1${img_mnt}
-          rootfs_img_mnt=$1${rootfs_mnt}
-          sudo rm -rf ${boot_img} ${boot_img_mnt} ${rootfs_img_mnt}
-          sudo dd if=/dev/zero of=${boot_img} bs=1M count=400
-          sudo mkfs.ext4 ${boot_img}
-          sudo mkdir ${boot_img_mnt} ${rootfs_img_mnt}
-          sudo mount ${boot_img} ${boot_img_mnt}
-          sudo mount ${loop}p2 ${rootfs_img_mnt}
-          cd ${rootfs_img_mnt}
-          sudo cp -r * ../${boot_img_mnt}
-          cd ..
+          sudo dd if=/dev/zero of=openwrt.img bs=1M count=400
+          sudo mkfs.ext4 openwrt.img
+          sudo mkdir -p xd img
+          sudo mount openwrt.img xd
+          sudo mount ${loop}p2 img
+          sudo cp -rf img/* xd/
           sudo sync
-          sudo umount ${boot_img_mnt} ${rootfs_img_mnt}
+          sudo umount xd img
           sudo img2simg ${loop}p1 burn/boot.simg
           sudo img2simg openwrt.img burn/rootfs.simg
-          sudo rm -rf *.img
           sudo losetup -d $loop
           cat <<EOF >>burn/commands.txt
           PARTITION:boot:sparse:boot.simg
           PARTITION:rootfs:sparse:rootfs.simg
           EOF
-          prefix=$(ls openwrt/bin/targets/*/*/*.img | sed 's/\.img$//')
-          burnimg=${prefix}.burn.img
-          ./AmlImg pack $burnimg burn/
-          for f in openwrt/bin/targets/*/*/*.burn.img; do
-            sha256sum "$f" >"${f}.sha"
-            xz -9 --threads=0 --compress "$f"
-          done
-          sudo rm -rf openwrt/bin/targets/*/*/*.img openwrt/bin/targets/*/*/*.gz
+          prefix=$(ls openwrt/bin/targets/*/*/*.img | head -n 1 | sed 's/\.img$//')
+          ./AmlImg pack ${prefix}.burn.img burn/
+          xz -9 --threads=0 ${prefix}.burn.img
 
     - name: Organize firmware files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success'
+      if: steps.compile.outputs.status == 'success'
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
@@ -230,31 +212,17 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success'
       with:
-        name: OpenWrt_NiuLink_Ultimate_${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
-
-    - name: Generate release tag
-      id: tag
-      if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success'
-      run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
-        echo "🚀 玩客云 (OneCloud) NiuLink PCDN 终极跑量版" >> release.txt
-        echo "✅ 完美内置: curl, chattr, tty, nohup, cgroup 等 NiuLink 刚需组件" >> release.txt
-        echo "✅ 排错神器: 预装 lsblk, fdisk, blkid" >> release.txt
-        echo "✅ 极致精简: 剔除无用大插件，保留 Argon 主题，释放内存" >> release.txt
-        echo "💡 默认管理 IP: 192.168.2.1" >> release.txt
-        echo "status=success" >> $GITHUB_OUTPUT
+        name: OpenWrt_NiuLink_V2.1_${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}/*.xz
 
     - name: Upload firmware to Releases
       uses: softprops/action-gh-release@master
-      if: steps.tag.outputs.status == 'success'
+      if: steps.compile.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
+        tag_name: NiuLink-v2.1-${{ env.FILE_DATE }}
+        files: ${{ env.FIRMWARE }}/*.xz
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
