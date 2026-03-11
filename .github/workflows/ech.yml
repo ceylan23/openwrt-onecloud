@@ -1,6 +1,6 @@
 #
 # Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OneCloud OpenWrt with Watchcat & BBR & ECH-Workers & Python3
+# Description: Build OneCloud OpenWrt with Watchcat & BBR & ECH & Python & CDNSpeedTest
 #
 
 name: Build OneCloud OpenWrt & Packages
@@ -121,26 +121,25 @@ jobs:
         # 8. ECH-Workers 图形化界面插件
         git clone --depth=1 https://github.com/SunshineList/luci-app-ech-workers.git package/my/luci-app-ech-workers
 
-    - name: Inject CloudflareST and Auto-Switch Script
+        # 9. [新增] 原生 CloudflareSpeedTest (cdnspeedtest)
+        mkdir -p package/my/cdnspeedtest
+        curl -fL "https://raw.githubusercontent.com/immortalwrt/packages/master/net/cdnspeedtest/Makefile" | sed 's,../../lang,$(TOPDIR)/feeds/packages/lang,' > package/my/cdnspeedtest/Makefile
+
+    - name: Inject Auto-Switch Script
       run: |
         cd openwrt
         mkdir -p files/root/cf_test
         mkdir -p files/etc/crontabs
         
-        # 修复了 404 错误：精准下载 armv7 版本
-        wget https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareST_linux_armv7.tar.gz
-        tar -zxf CloudflareST_linux_armv7.tar.gz -C files/root/cf_test/
-        rm CloudflareST_linux_armv7.tar.gz
-        chmod +x files/root/cf_test/CloudflareST
-        
         cat << 'EOF' > files/root/cf_test/auto_switch.sh
         #!/bin/sh
         WORK_DIR="/root/cf_test"
         echo "====================================="
-        echo "开始测速并寻找最优 IP..."
+        echo "开始原生测速并寻找最优 IP..."
         cd $WORK_DIR
         
-        ./CloudflareST -n 10 -sl 2 -f ip.txt -o result.csv
+        # 使用原生 cdnspeedtest 命令，并调用官方自带的 ip 库路径
+        cdnspeedtest -n 10 -sl 2 -f /usr/share/CloudflareSpeedTest/ip.txt -o result.csv
         
         NEW_IP=$(sed -n '2p' result.csv | awk -F ',' '{print $1}')
         
@@ -216,6 +215,9 @@ jobs:
         
         # 编译包含 ECH 插件
         echo "CONFIG_PACKAGE_luci-app-ech-workers=y" >> .config
+
+        # [新增] 编译原生测速插件
+        echo "CONFIG_PACKAGE_cdnspeedtest=y" >> .config
 
         # Python3 环境及相关常用库
         echo "CONFIG_PACKAGE_python3=y" >> .config
@@ -337,8 +339,8 @@ jobs:
         echo "玩客云 (OneCloud) 专属增强直刷固件" >> release.txt
         echo "包含: 随身WiFi驱动, OpenClash, MosDNS v5, AdGuard Home, ECH-Workers" >> release.txt
         echo "优化: 核心 TCP BBR 加速, Watchcat, UPnP, Alpha-Reborn/Argon 主题" >> release.txt
-        echo "特别版: 极客定制版，集成 CloudflareST 自动优选 + 完整 Python3 环境" >> release.txt
-        echo "特色插件: luci-app-commands (方便在网页后台直接运行 Python 脚本)" >> release.txt
+        echo "特别版: 原生 cdnspeedtest 编译集成 + 自动替换脚本" >> release.txt
+        echo "特色插件: luci-app-commands (配合原生 Python3 环境使用)" >> release.txt
         echo "默认管理 IP: 192.168.2.1" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
