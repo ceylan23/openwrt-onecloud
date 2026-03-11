@@ -1,9 +1,9 @@
 #
 # Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-# Description: Build OneCloud OpenWrt with Watchcat & BBR & ECH & Python & CDNSpeedTest
+# Description: Build OneCloud OpenWrt for NiuLink PCDN (Ultimate v3.0 - Full Cgroup & Docker Ready)
 #
 
-name: Build OneCloud OpenWrt & Packages
+name: Build OneCloud NiuLink-PCDN-Ultimate-v3.0
 
 on:
   repository_dispatch:
@@ -19,7 +19,7 @@ env:
   DIY_P3_SH: op3.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
-  UPLOAD_PACKAGES: true
+  UPLOAD_PACKAGES: false
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
@@ -90,83 +90,11 @@ jobs:
       run: |
         cd openwrt
         mkdir -p package/my
-        
-        # 1. 删除自带 MosDNS
-        rm -rf feeds/packages/net/mosdns
-        rm -rf feeds/luci/applications/luci-app-mosdns
-        rm -rf feeds/packages/net/v2ray-geodata
-        
-        # 2. OpenClash
-        git clone --depth=1 https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
-        mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
-        rm -rf package/my/openclash-tmp
-        
-        # 3. Argon 主题
         git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
-        
-        # 4. MosDNS v5
-        git clone --depth=1 -b v5 https://github.com/sbwml/luci-app-mosdns.git package/my/luci-app-mosdns
-        
-        # 5. v2ray-geodata
-        git clone --depth=1 https://github.com/sbwml/v2ray-geodata.git package/my/v2ray-geodata-tmp
-        mv package/my/v2ray-geodata-tmp/* package/my/
-        rm -rf package/my/v2ray-geodata-tmp
-
-        # 6. AdGuard Home
-        git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/my/luci-app-adguardhome
-
-        # 7. Alpha Reborn 主题
-        git clone --depth=1 https://github.com/derisamedia/luci-theme-alpha-reborn.git package/my/luci-theme-alpha-reborn
-
-        # 8. ECH-Workers 图形化界面插件
-        git clone --depth=1 https://github.com/SunshineList/luci-app-ech-workers.git package/my/luci-app-ech-workers
-
-        # 9. [新增] 原生 CloudflareSpeedTest (cdnspeedtest)
-        mkdir -p package/my/cdnspeedtest
-        curl -fL "https://raw.githubusercontent.com/immortalwrt/packages/master/net/cdnspeedtest/Makefile" | sed 's,../../lang,$(TOPDIR)/feeds/packages/lang,' > package/my/cdnspeedtest/Makefile
-
-    - name: Inject Auto-Switch Script
-      run: |
-        cd openwrt
-        mkdir -p files/root/cf_test
-        mkdir -p files/etc/crontabs
-        
-        cat << 'EOF' > files/root/cf_test/auto_switch.sh
-        #!/bin/sh
-        WORK_DIR="/root/cf_test"
-        echo "====================================="
-        echo "开始原生测速并寻找最优 IP..."
-        cd $WORK_DIR
-        
-        # 使用原生 cdnspeedtest 命令，并调用官方自带的 ip 库路径
-        cdnspeedtest -n 10 -sl 2 -f /usr/share/CloudflareSpeedTest/ip.txt -o result.csv
-        
-        NEW_IP=$(sed -n '2p' result.csv | awk -F ',' '{print $1}')
-        
-        if [ -n "$NEW_IP" ]; then
-            echo "最优 IP 为: $NEW_IP，正在应用到 OpenWrt..."
-            CONFIG_FILE="/etc/config/ech-workers"
-            if [ -f "$CONFIG_FILE" ]; then
-                sed -i -E "s/option prefer_ip '.+'/option prefer_ip '$NEW_IP'/g" $CONFIG_FILE
-                sed -i -E "s/option ip '.+'/option ip '$NEW_IP'/g" $CONFIG_FILE
-                
-                /etc/init.d/ech-workers restart
-                echo "ECH-Workers 已重启，IP 替换成功！"
-            else
-                echo "未找到 $CONFIG_FILE，请在后台配置一次 ECH 插件生成文件。"
-            fi
-        else
-            echo "未找到符合要求的 IP，放弃替换。"
-        fi
-        echo "====================================="
-        EOF
-        chmod +x files/root/cf_test/auto_switch.sh
-        
-        echo "0 4 * * * /root/cf_test/auto_switch.sh > /root/cf_test/cron.log 2>&1" >> files/etc/crontabs/root
 
     - name: Load custom configuration
       run: |
-        [ -e files ] && cp -r files/* openwrt/files/ || true
+        [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
         chmod +x $DIY_P2_SH
         cd openwrt
@@ -174,60 +102,71 @@ jobs:
         
         sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
         sed -i 's/ dnsmasq / /g' include/target.mk
-        sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config
+        sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=512/g' .config
 
-    - name: Download package and Inject Drivers
+    - name: Download package and Inject Ultimate Drivers v3.0
       id: package
       run: |
         cd openwrt
         make defconfig
         
-        # ==================== 核心修改区 ====================
+        # ==================== 补全 NiuLink 核心依赖与 Docker/Cgroup 环境 ====================
         
-        # dnsmasq 替换
-        sed -i 's/CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
-        sed -i 's/CONFIG_DEFAULT_dnsmasq=y/# CONFIG_DEFAULT_dnsmasq is not set/g' .config
-        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        # 0. 修复日志中的 Cgroup 缺失和 Docker 报错 (终极修复)
+        echo "CONFIG_KERNEL_CGROUP_SCHED=y" >> .config
+        echo "CONFIG_KERNEL_CGROUPS=y" >> .config
+        echo "CONFIG_PACKAGE_cgroupfs-mount=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-cgroup=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ikconfig=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-macvlan=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-dummy=y" >> .config
+        echo "CONFIG_PACKAGE_apparmor=y" >> .config
+        echo "CONFIG_PACKAGE_docker=y" >> .config
+        echo "CONFIG_PACKAGE_dockerd=y" >> .config
+        echo "CONFIG_PACKAGE_docker-compose=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
         
-        # 随身WiFi驱动恢复
-        echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
-        echo "CONFIG_PACKAGE_usb-modeswitch-data=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-net-huawei-cdc-ncm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
-        
-        # 基础增强组件
-        echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
-        echo "CONFIG_PACKAGE_usbutils=y" >> .config
+        # 1. 网页终端
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
-
-        # 开启 UPnP 与 BBR
+        
+        # 2. 解决 iptables 找不到的问题 (包含老版本兼容命令)
+        echo "CONFIG_PACKAGE_iptables=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-zz-legacy=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-extra=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-cgroup=y" >> .config
+        
+        # 3. 补全 JSON 处理工具 (脚本死穴)
+        echo "CONFIG_PACKAGE_jq=y" >> .config
+        
+        # 4. 补全下载与网络命令
+        echo "CONFIG_PACKAGE_curl=y" >> .config
+        echo "CONFIG_PACKAGE_wget-ssl=y" >> .config
+        echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
+        echo "CONFIG_PACKAGE_ca-certificates=y" >> .config
+        echo "CONFIG_PACKAGE_ip-full=y" >> .config
+        echo "CONFIG_PACKAGE_ppp=y" >> .config # 根据报错补充
+        
+        # 5. 补全脚本所需的底层命令
+        echo "CONFIG_PACKAGE_bash=y" >> .config
+        echo "CONFIG_PACKAGE_coreutils=y" >> .config
+        echo "CONFIG_PACKAGE_coreutils-stat=y" >> .config
+        echo "CONFIG_PACKAGE_coreutils-tty=y" >> .config
+        echo "CONFIG_PACKAGE_coreutils-nohup=y" >> .config
+        echo "CONFIG_PACKAGE_chattr=y" >> .config
+        echo "CONFIG_PACKAGE_lsblk=y" >> .config
+        echo "CONFIG_PACKAGE_fdisk=y" >> .config
+        echo "CONFIG_PACKAGE_qrencode=y" >> .config
+        echo "CONFIG_PACKAGE_nmap=y" >> .config
+        
+        # 6. 基础增强与主题
+        echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-        
-        # 主题
-        echo "CONFIG_PACKAGE_luci-theme-alpha-reborn=y" >> .config
-        
-        # 编译包含 ECH 插件
-        echo "CONFIG_PACKAGE_luci-app-ech-workers=y" >> .config
+        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
 
-        # [新增] 编译原生测速插件
-        echo "CONFIG_PACKAGE_cdnspeedtest=y" >> .config
-
-        # Python3 环境及相关常用库
-        echo "CONFIG_PACKAGE_python3=y" >> .config
-        echo "CONFIG_PACKAGE_python3-pip=y" >> .config
-        echo "CONFIG_PACKAGE_python3-requests=y" >> .config
-        
-        # LuCI 网页执行脚本插件 (自定义命令)
-        echo "CONFIG_PACKAGE_luci-app-commands=y" >> .config
-        
-        # ====================================================
+        # ==============================================================================
         
         make defconfig
         make download -j8
@@ -253,70 +192,31 @@ jobs:
           chmod +x ./AmlImg
           curl -L -o ./uboot.img https://github.com/lxiaya/u-boot-onecloud/releases/download/build-20230901-0443/eMMC.burn.img
           ./AmlImg unpack ./uboot.img burn/
-          echo "::endgroup::"
           gunzip openwrt/bin/targets/*/*/*.gz
-          diskimg=$(ls openwrt/bin/targets/*/*/*.img)
+          diskimg=$(ls openwrt/bin/targets/*/*/*.img | head -n 1)
           loop=$(sudo losetup --find --show --partscan $diskimg)
-          img_ext="openwrt.img"
-          img_mnt="xd"
-          rootfs_mnt="img"
-          boot_img=$1${img_ext}
-          boot_img_mnt=$1${img_mnt}
-          rootfs_img_mnt=$1${rootfs_mnt}
-          sudo rm -rf ${boot_img} ${boot_img_mnt} ${rootfs_img_mnt}
-          sudo dd if=/dev/zero of=${boot_img} bs=1M count=400
-          sudo mkfs.ext4 ${boot_img}
-          sudo mkdir ${boot_img_mnt} ${rootfs_img_mnt}
-          sudo mount ${boot_img} ${boot_img_mnt}
-          sudo mount ${loop}p2 ${rootfs_img_mnt}
-          cd ${rootfs_img_mnt}
-          sudo cp -r * ../${boot_img_mnt}
-          cd ..
+          sudo dd if=/dev/zero of=openwrt.img bs=1M count=512
+          sudo mkfs.ext4 openwrt.img
+          sudo mkdir -p xd img
+          sudo mount openwrt.img xd
+          sudo mount ${loop}p2 img
+          sudo cp -rf img/* xd/
           sudo sync
-          sudo umount ${boot_img_mnt} ${rootfs_img_mnt}
+          sudo umount xd img
           sudo img2simg ${loop}p1 burn/boot.simg
           sudo img2simg openwrt.img burn/rootfs.simg
-          sudo rm -rf *.img
           sudo losetup -d $loop
           cat <<EOF >>burn/commands.txt
           PARTITION:boot:sparse:boot.simg
           PARTITION:rootfs:sparse:rootfs.simg
           EOF
-          prefix=$(ls openwrt/bin/targets/*/*/*.img | sed 's/\.img$//')
-          burnimg=${prefix}.burn.img
-          ./AmlImg pack $burnimg burn/
-          for f in openwrt/bin/targets/*/*/*.burn.img; do
-            sha256sum "$f" >"${f}.sha"
-            xz -9 --threads=0 --compress "$f"
-          done
-          sudo rm -rf openwrt/bin/targets/*/*/*.img openwrt/bin/targets/*/*/*.gz
-
-    - name: Extract Packages
-      if: env.UPLOAD_PACKAGES == 'true' && steps.compile.outputs.status == 'success'
-      run: |
-        cd openwrt
-        mkdir -p $GITHUB_WORKSPACE/my_plugins
-        find bin/packages bin/targets -name "luci-app-openclash*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
-        find bin/packages bin/targets -name "*mosdns*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
-        find bin/packages bin/targets -name "luci-theme-argon*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
-        find bin/packages bin/targets -name "luci-theme-alpha-reborn*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
-        find bin/packages bin/targets -name "luci-app-ech-workers*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
-        echo "PACKAGES_DIR=$GITHUB_WORKSPACE/my_plugins" >> $GITHUB_ENV
-
-    - name: Check space usage
-      if: (!cancelled())
-      run: df -hT
-
-    - name: Upload specific Packages to Artifact
-      uses: actions/upload-artifact@main
-      if: env.UPLOAD_PACKAGES == 'true' && steps.compile.outputs.status == 'success'
-      with:
-        name: OneCloud_Plugins_IPK${{ env.FILE_DATE }}
-        path: ${{ env.PACKAGES_DIR }}/*.ipk
+          prefix=$(ls openwrt/bin/targets/*/*/*.img | head -n 1 | sed 's/\.img$//')
+          ./AmlImg pack ${prefix}.burn.img burn/
+          xz -9 --threads=0 ${prefix}.burn.img
 
     - name: Organize firmware files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success'
+      if: steps.compile.outputs.status == 'success'
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
@@ -327,34 +227,17 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success'
       with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+        name: OpenWrt_NiuLink_V3.0_${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}/*.xz
 
-    - name: Generate release tag
-      id: tag
-      if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success'
-      run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
-        echo "玩客云 (OneCloud) 专属增强直刷固件" >> release.txt
-        echo "包含: 随身WiFi驱动, OpenClash, MosDNS v5, AdGuard Home, ECH-Workers" >> release.txt
-        echo "优化: 核心 TCP BBR 加速, Watchcat, UPnP, Alpha-Reborn/Argon 主题" >> release.txt
-        echo "特别版: 原生 cdnspeedtest 编译集成 + 自动替换脚本" >> release.txt
-        echo "特色插件: luci-app-commands (配合原生 Python3 环境使用)" >> release.txt
-        echo "默认管理 IP: 192.168.2.1" >> release.txt
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: Upload firmware and packages to Releases
+    - name: Upload firmware to Releases
       uses: softprops/action-gh-release@master
-      if: steps.tag.outputs.status == 'success'
+      if: steps.compile.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: release.txt
-        files: |
-          ${{ env.FIRMWARE }}/*
-          ${{ env.PACKAGES_DIR }}/*.ipk
+        tag_name: NiuLink-v3.0-${{ env.FILE_DATE }}
+        files: ${{ env.FIRMWARE }}/*.xz
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
