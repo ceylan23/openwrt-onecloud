@@ -127,9 +127,10 @@ jobs:
         mkdir -p files/root/cf_test
         mkdir -p files/etc/crontabs
         
-        wget https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareST_linux_arm.tar.gz
-        tar -zxf CloudflareST_linux_arm.tar.gz -C files/root/cf_test/
-        rm CloudflareST_linux_arm.tar.gz
+        # 修复了 404 错误：精准下载 armv7 版本
+        wget https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareST_linux_armv7.tar.gz
+        tar -zxf CloudflareST_linux_armv7.tar.gz -C files/root/cf_test/
+        rm CloudflareST_linux_armv7.tar.gz
         chmod +x files/root/cf_test/CloudflareST
         
         cat << 'EOF' > files/root/cf_test/auto_switch.sh
@@ -216,12 +217,12 @@ jobs:
         # 编译包含 ECH 插件
         echo "CONFIG_PACKAGE_luci-app-ech-workers=y" >> .config
 
-        # [新增] Python3 环境及相关常用库
+        # Python3 环境及相关常用库
         echo "CONFIG_PACKAGE_python3=y" >> .config
         echo "CONFIG_PACKAGE_python3-pip=y" >> .config
         echo "CONFIG_PACKAGE_python3-requests=y" >> .config
         
-        # [新增] LuCI 网页执行脚本插件 (自定义命令)
+        # LuCI 网页执行脚本插件 (自定义命令)
         echo "CONFIG_PACKAGE_luci-app-commands=y" >> .config
         
         # ====================================================
